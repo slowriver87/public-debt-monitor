@@ -24,6 +24,7 @@ Standard library only.
 import argparse
 import calendar
 import datetime as dt
+import decimal
 import json
 import os
 import re
@@ -812,9 +813,18 @@ def check_current(objs, report):
                  f"{s:,.1f} vs {T['v']['Grand Total'][-1]:,.1f}")
 
 
+def bill_share(D):
+    """Same formula as the page: (Bills public + intragov) / (all marketable public + intragov),
+    from the latest DATA.mkt row."""
+    cols = D["mkt"][-1][1]
+    bills = sum(cols[D["mktcols"].index("Bills")])
+    share = 100 * bills / sum(sum(c) for c in cols)
+    # round like JavaScript's toFixed(1): half up on the exact binary value
+    return float(decimal.Decimal(share).quantize(decimal.Decimal("0.1"), rounding=decimal.ROUND_HALF_UP))
+
+
 def summary(objs):
     D, H, T = objs["DATA"], objs["HOLD"], objs["TIC"]
-    t1 = D["table1"]
     last = D["totals"][-1]
     return {
         "statement_date": D["asof"],
@@ -822,7 +832,7 @@ def summary(objs):
         "total_public_debt": last[3],
         "held_by_public": last[1],
         "intragovernmental": last[2],
-        "bill_share_pct": round(100 * t1["marketable"]["Bills"][0] / t1["total_marketable"][0], 1),
+        "bill_share_pct": bill_share(D),
         "debt_limit": D["table2"]["limit"],
         "debt_limit_room": D["table2"]["balance"],
         "holders_quarter": H["asof"],

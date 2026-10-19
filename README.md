@@ -14,7 +14,7 @@ The page is `index.html`, a self-contained file served by GitHub Pages. Every nu
 | `HOLD` | Who holds debt held by the public (foreign holders, the Fed, money market funds, households, banks, pensions, …) | Federal Reserve, [Financial Accounts of the United States (Z.1)](https://www.federalreserve.gov/releases/z1/), table F3.2.s "Treasury securities", read line by line from [FRED](https://fred.stlouisfed.org/) (series `BOGZ1<code>Q`) | Quarterly (March, June, September, December) | $ billions |
 | `TIC` | Foreign holders by country | U.S. Treasury, [TIC Table 5: Major Foreign Holders of Treasury Securities](https://ticdata.treasury.gov/resource-center/data-chart-center/tic/Documents/slt_table5.html); history back to 2014 from `mfhhis01` | Monthly, around the 15th–18th, for the month two months earlier | $ billions |
 
-`data/summary.json` is a small summary for other pages: latest statement date, total, held by the public, intragovernmental, bill share (bills held by the public as a percentage of marketable debt held by the public), debt limit and room under it, and the dates of the holder data.
+`data/summary.json` is a small summary for other pages: latest statement date, total, held by the public, intragovernmental, bill share (the same formula as the page: bills, public plus intragovernmental, as a percentage of all marketable debt, public plus intragovernmental, from the latest month in `DATA.mkt`), debt limit and room under it, and the dates of the holder data.
 
 ## How the update works
 
