@@ -1,0 +1,81 @@
+name: Update data
+
+on:
+  schedule:
+    # Daily at 22:17 UTC, after Treasury's afternoon releases (MSPD, TIC) and the Fed's Z.1.
+    - cron: "17 22 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: fetch and check, show what would change, commit nothing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: update-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dry run (fetch and check, write nothing)
+        if: env.DRY_RUN == 'true'
+        run: |
+          status=0
+          python scripts/update.py --dry-run --report-file "$RUNNER_TEMP/report.md" || status=$?
+          { echo "## Dry run"; cat "$RUNNER_TEMP/report.md" 2>/dev/null || true; } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      - name: Fetch, check and rebuild
+        if: env.DRY_RUN != 'true'
+        run: |
+          status=0
+          python scripts/update.py --message-file "$RUNNER_TEMP/message.txt" --report-file "$RUNNER_TEMP/report.md" || status=$?
+          { echo "## Update"; cat "$RUNNER_TEMP/report.md" 2>/dev/null || true; } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      - name: Commit if anything changed
+        if: env.DRY_RUN != 'true'
+        env:
+          OWNER: ${{ github.repository_owner }}
+          OWNER_ID: ${{ github.repository_owner_id }}
+        run: |
+          if git diff --quiet -- index.html data/summary.json; then
+            echo "Nothing new."
+            exit 0
+          fi
+          git config user.name "$OWNER"
+          git config user.email "${OWNER_ID}+${OWNER}@users.noreply.github.com"
+          git add index.html data/summary.json
+          git commit -F "$RUNNER_TEMP/message.txt"
+          git push
+
+      - name: Open or update an issue when a check fails
+        if: failure() && env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Data update failed"
+          { echo "The scheduled update stopped and nothing was committed. Run: $RUN_URL"; echo
+            cat "$RUNNER_TEMP/report.md" 2>/dev/null || true; } > "$RUNNER_TEMP/issue.md"
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file "$RUNNER_TEMP/issue.md"
+          else
+            gh issue create --title "$title" --body-file "$RUNNER_TEMP/issue.md"
+          fi
