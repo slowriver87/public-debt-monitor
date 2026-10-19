@@ -758,8 +758,21 @@ def update_hold(old, data, report):
 
 # ------------------------------------------------------------- 3. TIC
 
+# Table 5 row labels, matched exactly after trimming spaces
+TIC_GRAND = "Grand Total"
+TIC_OTHER = "All Other"
+TIC_OFFICIAL = "Of Which: Foreign Official"
+TIC_OFFICIAL_BONDS = "Of Which: Foreign Official T-Bonds & Notes"
+TIC_OFFICIAL_BILLS = ("Of Which: Foreign Official Treasury Bills", "Of Which: Foreign Official T-Bills")
+TIC_MAX_REVISION = 0.05     # an existing value changing by more than this share stops the update
+
+
 def parse_tic(text):
-    """Table 5 is tab-delimited: country, then 13 month columns headed YYYY-MM, newest first."""
+    """Table 5 is tab-delimited: label, then 13 month columns headed YYYY-MM, newest first.
+
+    Returns the months, {exact label: values}, the labels above Grand Total (countries and
+    All Other, in table order), and the release date if the header mentions one.
+    """
     lines = text.replace("\r", "").split("\n")
     head = None
     for i, line in enumerate(lines):
@@ -771,31 +784,23 @@ def parse_tic(text):
     if head is None:
         raise CheckFailed("TIC Table 5: no header row with 13 YYYY-MM columns")
     dates = [c for _, c in cols]
-    rows, order, official_seen = {}, [], False
+    rows, above = {}, []
     for line in lines[head + 1:]:
-        cells = [c.strip() for c in line.split("\t")]
-        name = re.sub(r"\s+", " ", cells[0]).strip().rstrip(":")
-        if not name:
+        cells = line.split("\t")
+        label = cells[0].strip()
+        if not label:
             continue
         try:
-            vals = [float(cells[j].replace(",", "")) for j, _ in cols]
+            vals = [float(cells[j].strip().replace(",", "")) for j, _ in cols]
         except (IndexError, ValueError):
             continue
-        key = name.lower()
-        if key == "grand total":
-            rows["Grand Total"] = vals
-        elif key.startswith("all other"):
-            rows["All Other"] = vals
-        elif "foreign official" in key:
-            rows["Foreign Official"] = vals
-            official_seen = True
-        elif "Grand Total" in rows or official_seen:
-            continue                        # bills / bonds lines under the official row
-        elif name not in rows:
-            rows[name] = vals
-            order.append(name)
+        if label in rows:
+            raise CheckFailed(f"TIC Table 5: row '{label}' appears twice")
+        rows[label] = vals
+        if TIC_GRAND not in rows:
+            above.append(label)
     release = parse_text_date("\n".join(lines[:head]))
-    return dates, rows, order, release
+    return dates, rows, above, release
 
 
 def tic_release_date(asof, report, old):
@@ -814,25 +819,48 @@ def tic_release_date(asof, report, old):
     return None
 
 
+def tic_view(obj):
+    """TIC with every value keyed by its month, so old and new can be compared month by month."""
+    d = obj["dates"]
+    yago = f"{int(obj['asof'][:4]) - 1}{obj['asof'][4:]}"
+    return {"asof": obj["asof"], "release": obj["release"], "countries": obj["countries"],
+            "v": {n: dict(zip(d, s)) for n, s in obj["v"].items()},
+            "allOther": dict(zip([obj["asof"], d[-2], yago], obj["allOther"]))}
+
+
 def update_tic(old, report):
     text = fetch(TIC_TABLE5)
-    dates, rows, order, release = parse_tic(text)
+    dates, rows, above, release = parse_tic(text)
     if dates[0] > dates[-1]:
         dates = dates[::-1]
         rows = {k: v[::-1] for k, v in rows.items()}
-    for need in ("Grand Total", "All Other", "Foreign Official"):
-        if need not in rows:
-            raise CheckFailed(f"TIC Table 5: no '{need}' row")
+    bills = [b for b in TIC_OFFICIAL_BILLS if b in rows]
+    missing = [r for r in (TIC_GRAND, TIC_OTHER, TIC_OFFICIAL, TIC_OFFICIAL_BONDS) if r not in rows]
+    if missing or len(bills) != 1:
+        below = [k for k in rows if k not in above and k != TIC_GRAND]
+        raise CheckFailed(f"TIC Table 5: expected rows not found exactly: "
+                          f"{missing + ([] if len(bills) == 1 else [' or '.join(TIC_OFFICIAL_BILLS)])}; "
+                          f"rows below Grand Total are {below}")
+    known = {TIC_GRAND, TIC_OTHER, TIC_OFFICIAL, TIC_OFFICIAL_BONDS, bills[0]}
+    extra = [k for k in rows if k not in above and k not in known]
+    if extra:
+        report.warn(f"TIC Table 5: rows not used: {extra}")
 
-    named = {n: rows[n] for n in order}
-    top20 = order[:20]
-    newcomers = [n for n in top20 if n not in old["countries"]]
+    # Foreign Official = its bills + its bonds and notes, every month read
+    fo, fb, fn = rows[TIC_OFFICIAL], rows[bills[0]], rows[TIC_OFFICIAL_BONDS]
+    off = [f"{d}: {o:,.1f} vs {b:,.1f} + {n:,.1f}" for d, o, b, n in zip(dates, fo, fb, fn)
+           if not close(o, b + n, 1.0)]
+    report.check(not off, f"TIC: Foreign Official equals its Treasury Bills + T-Bonds & Notes within $1B "
+                          f"for all {len(dates)} months", "; ".join(off))
+
+    countries = [k for k in above if k != TIC_OTHER]
+    newcomers = [n for n in countries[:20] if n not in old["countries"]]
     if newcomers:
         raise CheckFailed(f"TIC Table 5: new country in the top 20, not reshaping: {newcomers}. "
                           f"Update the country list by hand.")
-    missing = [c for c in old["countries"] if c not in named]
-    if missing:
-        raise CheckFailed(f"TIC Table 5: countries not found: {missing}")
+    absent = [c for c in old["countries"] if c not in rows]
+    if absent:
+        raise CheckFailed(f"TIC Table 5: countries not found under their exact names: {absent}")
 
     asof = dates[-1]
     if asof < old["asof"]:
@@ -845,15 +873,15 @@ def update_tic(old, report):
         for s in new["v"].values():
             s.append(None)
     pos = {d: i for i, d in enumerate(new["dates"])}
-    series = dict(named, **{"Grand Total": rows["Grand Total"], "Foreign Official": rows["Foreign Official"]})
+    source = {"Grand Total": TIC_GRAND, "Foreign Official": TIC_OFFICIAL}
     for name in new["v"]:
-        for d, v in zip(dates, series[name]):
+        for d, v in zip(dates, rows[source.get(name, name)]):
             if d in pos:
                 new["v"][name][pos[d]] = r1(v)
     gaps = [n for n, s in new["v"].items() if None in s]
     if gaps:
         raise CheckFailed(f"TIC: months between {old['asof']} and {asof} not covered by Table 5 for {gaps}")
-    ao = dict(zip(dates, rows["All Other"]))
+    ao = dict(zip(dates, rows[TIC_OTHER]))
     yago = f"{int(asof[:4]) - 1}{asof[4:]}"
     prev = dates[-2]
     if yago not in ao:
@@ -867,6 +895,18 @@ def update_tic(old, report):
             rel = nice_date(dt.date.today())
         new["release"] = rel
 
+    # ---- revisions: an existing value moving by more than 5% stops the update
+    ov, nv = tic_view(old), tic_view(new)
+    big, revised = [], 0
+    for path, o, n in changes(ov, nv, "TIC"):
+        if not isinstance(o, (int, float)) or not isinstance(n, (int, float)):
+            continue
+        revised += 1
+        if abs(n - o) > TIC_MAX_REVISION * abs(o) or (o == 0 and n != 0):
+            big.append(f"{path}: {o:,.1f} -> {n:,.1f}")
+    report.check(not big, f"TIC: no existing value revised by more than {TIC_MAX_REVISION:.0%}",
+                 "; ".join(big))
+
     # ---- checks
     n = len(new["dates"])
     report.check(all(len(s) == n for s in new["v"].values()), "TIC: every series has the same length as dates")
@@ -878,11 +918,7 @@ def update_tic(old, report):
     if new == old:
         report.say(f"TIC: no new month and no revisions (page {old['asof']}).")
         return None
-    revised = sum(1 for name in old["v"] for a, b in zip(old["v"][name], new["v"][name]) if a != b)
-    report.say(f"TIC: newest month {asof} (page had {old['asof']}); {revised} earlier values revised.")
-    for name in ("Grand Total", "Japan", "United Kingdom", "China, Mainland", "Foreign Official"):
-        report.say(f"  {name:<20} {old['v'][name][-1]:>9,.1f} ({old['asof']}) -> "
-                   f"{new['v'][name][-1]:>9,.1f} ({asof}) $B")
+    report.say(f"TIC: newest month {asof} (page had {old['asof']}); {revised} existing values revised.")
     return new
 
 
@@ -961,6 +997,57 @@ def summary(objs):
     }
 
 
+# ------------------------------------------------------- change listing
+
+def view(name, obj):
+    """A form of each object in which values are keyed by month, quarter, name or label."""
+    if name == "TIC":
+        return tic_view(obj)
+    if name == "HOLD":
+        v = dict(obj)
+        for k in ("held", "disc", "z1mkt", "mspdMkt", "public"):
+            v[k] = dict(zip([obj["prior"], obj["asof"]], obj[k]))
+        return v
+    return obj
+
+
+def keyed(items):
+    if items and all(isinstance(x, dict) and "name" in x for x in items):
+        return {x["name"]: {k: v for k, v in x.items() if k != "name"} for x in items}
+    if items and all(isinstance(x, list) and x and isinstance(x[0], str) for x in items):
+        return {x[0]: (x[1] if len(x) == 2 else x[1:]) for x in items}
+    return None
+
+
+def changes(old, new, path):
+    """Yield (path, old value, new value) for every leaf value that differs; None means absent."""
+    if isinstance(old, dict) and isinstance(new, dict):
+        for k in list(old) + [k for k in new if k not in old]:
+            yield from changes(old.get(k), new.get(k), f"{path}.{k}")
+        return
+    if isinstance(old, list) and isinstance(new, list):
+        ko, kn = keyed(old), keyed(new)
+        if ko is not None and kn is not None:
+            yield from changes(ko, kn, path)
+        else:
+            for i in range(max(len(old), len(new))):
+                yield from changes(old[i] if i < len(old) else None, new[i] if i < len(new) else None,
+                                   f"{path}[{i}]")
+        return
+    if old != new:
+        yield path, old, new
+
+
+def fmt(v):
+    if v is None:
+        return "(none)"
+    if isinstance(v, float):
+        return f"{v:,.1f}"
+    if isinstance(v, (dict, list)):
+        return dump(v)
+    return str(v)
+
+
 # -------------------------------------------------------------- main
 
 def main():
@@ -1019,6 +1106,11 @@ def main():
             if changed:
                 new_page = rebuild_page(page, new)
                 check_page(page, new_page, report)
+                listed = [(p, o, n) for name in changed
+                          for p, o, n in changes(view(name, objs[name]), view(name, new[name]), name)]
+                report.say(f"Every value that changes ({len(listed)}; old -> new):")
+                for p, o, n in listed:
+                    report.say(f"  {p}: {fmt(o)} -> {fmt(n)}")
             sm = summary(new)
             try:
                 with open(SUMMARY, encoding="utf-8") as f:
