@@ -4,7 +4,8 @@
 The page draws everything from three one-line JavaScript objects:
 
   const DATA = {...};   Monthly Statement of the Public Debt (Treasury Fiscal Data API)
-  const HOLD = {...};   Who holds the debt, quarterly (Federal Reserve Z.1 table F3.2.s, via FRED)
+  const HOLD = {...};   Who holds the debt, quarterly (Federal Reserve Z.1 table F3.2.s, via FRED,
+                        or the Fed's own table if FRED cannot be read)
   const TIC = {...};    Foreign holders by country, monthly (Treasury TIC Table 5)
 
 This script fetches each source, rebuilds only those three lines, runs the checks,
@@ -14,9 +15,13 @@ Usage:
   python scripts/update.py              fetch, check, write if anything changed
   python scripts/update.py --dry-run    fetch and check, report what would change, write nothing
   python scripts/update.py --check      no network: validate the objects already in index.html
+  --hold always                         read Z.1 even if no new release is due (default: only
+                                        on or after HOLD.next, the next scheduled release)
 
 Exit codes: 0 = success (updated or nothing new), 1 = a check failed or a source
-could not be read. Nothing is written unless the exit code is 0.
+could not be read. Nothing is written unless the exit code is 0. One exception: if
+Z.1 cannot be read from FRED or the Fed, HOLD keeps its current values, a warning
+is reported (and written to --alert-file), and DATA and TIC can still update.
 
 Standard library only.
 """
@@ -25,6 +30,7 @@ import argparse
 import calendar
 import datetime as dt
 import decimal
+import html.parser
 import json
 import os
 import re
@@ -44,11 +50,18 @@ FISCAL_API = "https://api.fiscaldata.treasury.gov/services/api/fiscal_service"
 MSPD = FISCAL_API + "/v1/debt/mspd/"
 PENNY = FISCAL_API + "/v2/accounting/od/debt_to_penny"
 FRED_CSV = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+Z1_TABLE = "https://www.federalreserve.gov/releases/z1/current/html/F3_2_s.htm"
 Z1_HOME = "https://www.federalreserve.gov/releases/z1/"
 TIC_TABLE5 = "https://ticdata.treasury.gov/resource-center/data-chart-center/tic/Documents/slt_table5.txt"
 TIC_PRESS = "https://home.treasury.gov/data/treasury-international-capital-tic-system-home-page/tic-press-releases"
 
-USER_AGENT = "public-debt-monitor-updater/1.0"
+HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/129.0 Safari/537.36"),
+    "Accept": "text/html,application/json,text/csv,text/plain,*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+TIMEOUT, TRIES, PAUSE = 60, 3, 5
 DISCLAIMER = "For education only. Not financial advice."
 OBJECTS = ("DATA", "HOLD", "TIC")
 
@@ -77,6 +90,10 @@ class CheckFailed(Exception):
     pass
 
 
+class SourceUnavailable(CheckFailed):
+    """A source could not be read (network error, timeout, HTTP error, or a missing line)."""
+
+
 class Report:
     """Collects check results, warnings and a human-readable comparison."""
 
@@ -85,6 +102,7 @@ class Report:
         self.warnings = []
         self.passed = []
         self.lines = []
+        self.alerts = []      # non-blocking problems that still need a person (opened as an issue)
 
     def check(self, ok, label, detail=""):
         text = label + (f" ({detail})" if detail else "")
@@ -110,18 +128,18 @@ class Report:
 
 # ---------------------------------------------------------------- helpers
 
-def fetch(url, params=None, tries=4):
+def fetch(url, params=None, tries=TRIES):
     if params:
         url += ("&" if "?" in url else "?") + urllib.parse.urlencode(params, safe=":,[]-")
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    req = urllib.request.Request(url, headers=HEADERS)
     for attempt in range(tries):
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
                 return r.read().decode(r.headers.get_content_charset() or "utf-8", "replace")
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
             if attempt == tries - 1:
-                raise CheckFailed(f"could not read {url}: {e}")
-            time.sleep(2 ** (attempt + 1))
+                raise SourceUnavailable(f"could not read {url} after {tries} tries: {e}")
+            time.sleep(PAUSE)
 
 
 def api(endpoint, params, page_size=10000):
@@ -517,8 +535,111 @@ def fred_series(code):
         y, m = int(cells[0][:4]), int(cells[0][5:7])
         out[(y, (m - 1) // 3 + 1)] = v / 1000
     if not out:
-        raise CheckFailed(f"FRED {sid}: no observations (series renamed or discontinued?)")
+        raise SourceUnavailable(f"FRED {sid}: no observations (series renamed or discontinued?)")
     return out
+
+
+def z1_from_fred(codes):
+    series = {}
+    for code in sorted(codes):     # stops at the first series FRED cannot serve
+        series[code] = fred_series(code)
+        time.sleep(0.2)
+    return series
+
+
+class TableParser(html.parser.HTMLParser):
+    """Collects the text of every table row as a list of cell strings."""
+
+    def __init__(self):
+        super().__init__()
+        self.rows, self.row, self.cell = [], None, None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "tr":
+            self.row = []
+        elif tag in ("td", "th") and self.row is not None:
+            self.cell = []
+
+    def handle_endtag(self, tag):
+        if tag in ("td", "th") and self.cell is not None and self.row is not None:
+            self.row.append(re.sub(r"\s+", " ", "".join(self.cell)).strip())
+            self.cell = None
+        elif tag == "tr" and self.row is not None:
+            if any(self.row):
+                self.rows.append(self.row)
+            self.row = None
+
+    def handle_data(self, data):
+        if self.cell is not None:
+            self.cell.append(data)
+
+
+Z1_CODE = re.compile(r"\b([A-Z]{2})(\d{9})\b")
+Z1_QUARTER = re.compile(r"(\d{4})\s*:?\s*Q\s*([1-4])\b|\bQ\s*([1-4])\s*:?\s*(\d{4})", re.I)
+NUMBER = re.compile(r"^-?\d*\.?\d+$")
+
+
+def z1_quarter(cell):
+    m = Z1_QUARTER.search(cell)
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2))) if m.group(1) else (int(m.group(4)), int(m.group(3)))
+
+
+def z1_from_fed_table(codes, report):
+    """The same lines from the Fed's own HTML table, matched by series code (e.g. FL313161105)."""
+    page_html = fetch(Z1_TABLE)
+    parser = TableParser()
+    parser.feed(page_html)
+    scale = 1 / 1000 if re.search(r"millions of dollars", page_html, re.I) else 1.0
+    header, cols, found = None, None, {}
+    for row in parser.rows:
+        qs = {i: q for i, c in enumerate(row) if (q := z1_quarter(c))}
+        if len(qs) >= 2:
+            header, cols = row, qs
+            continue
+        code = next((m.group(1) + m.group(2) for c in row if (m := Z1_CODE.search(c))), None)
+        if header is None or code is None:
+            continue
+        offset = len(row) - len(header)     # align value columns from the right
+        for i, q in cols.items():
+            j = i + offset
+            text = row[j].replace(",", "").replace(" ", "") if 0 <= j < len(row) else ""
+            if NUMBER.match(text):
+                found.setdefault(code, {})[q] = float(text) * scale
+    if not found:
+        raise SourceUnavailable(f"{Z1_TABLE}: no series codes with quarterly values found")
+    series, missing = {}, []
+    for code in sorted(codes):
+        other = {"FL": "LM", "LM": "FL"}.get(code[:2], "") + code[2:]
+        if code in found:
+            series[code] = found[code]
+        elif other in found:
+            report.warn(f"Fed table: {code} not found, used {other} (same line, other prefix)")
+            series[code] = found[other]
+        else:
+            missing.append(code)
+    if missing:
+        raise SourceUnavailable(f"Fed table F3.2.s has no lines {missing} (renamed or renumbered?)")
+    return series
+
+
+def read_z1(codes, report):
+    """Z.1 lines from FRED, or from the Fed's own table if FRED cannot be read."""
+    try:
+        return z1_from_fred(codes), "FRED"
+    except SourceUnavailable as e:
+        report.warn(f"HOLD: FRED not read ({e}); used the Fed's table F3.2.s instead")
+    return z1_from_fed_table(codes, report), "the Fed's table F3.2.s"
+
+
+def hold_due(old, today=None):
+    """True when a new Z.1 release could be out: on or after HOLD.next, which is later than HOLD.release."""
+    today = today or dt.date.today()
+    nxt, rel = parse_text_date(old.get("next", "")), parse_text_date(old.get("release", ""))
+    if nxt is None or (rel is not None and nxt <= rel):
+        return True
+    return today >= nxt
 
 
 def z1_release_dates(report, old):
@@ -545,20 +666,17 @@ def z1_release_dates(report, old):
 
 def update_hold(old, data, report):
     codes = {code for parts in Z1_GROUPS.values() for _, code in parts} | set(Z1_TOTALS.values())
-    series = {}
-    for code in sorted(codes):
-        series[code] = fred_series(code)
-        time.sleep(0.2)
+    series, source = read_z1(codes, report)
     newest = {code: max(s) for code, s in series.items()}
     cur_q = max(newest.values())
     lagging = sorted(c for c, q in newest.items() if q != cur_q)
     if lagging:
-        raise CheckFailed(f"Z.1 lines without {cur_q[0]}:Q{cur_q[1]} on FRED: {lagging} "
+        raise CheckFailed(f"Z.1 lines without {cur_q[0]}:Q{cur_q[1]} on {source}: {lagging} "
                           f"(renamed or renumbered? map them again from table F3.2.s)")
     prior_q = (cur_q[0] - 1, cur_q[1])
     missing = sorted(c for c, s in series.items() if prior_q not in s)
     if missing:
-        raise CheckFailed(f"Z.1 lines without {prior_q[0]}:Q{prior_q[1]} on FRED: {missing}")
+        raise CheckFailed(f"Z.1 lines without {prior_q[0]}:Q{prior_q[1]} on {source}: {missing}")
     asof = month_end(cur_q[0], cur_q[1] * 3)
     prior = month_end(prior_q[0], prior_q[1] * 3)
     if asof < old["asof"]:
@@ -618,11 +736,12 @@ def update_hold(old, data, report):
     # ---- compare with the page
     changed = {k: v for k, v in new.items() if k not in ("release", "next") and v != old[k]}
     if not changed:
-        report.say(f"HOLD: Z.1 values on FRED match the page for {prior} and {asof} (rounded to 0.1).")
+        report.say(f"HOLD: Z.1 values from {source} match the page for {prior} and {asof} (rounded to 0.1).")
         return None
     if new["asof"] != old["asof"] or new["held"] != old["held"]:
         new["release"], new["next"] = z1_release_dates(report, old)
-    report.say(f"HOLD: quarter {asof} (page had {old['asof']}); release {new['release']}, next {new['next']}.")
+    report.say(f"HOLD: quarter {asof} from {source} (page had {old['asof']}); "
+               f"release {new['release']}, next {new['next']}.")
     report.say(f"  {'group':<28} {'page prior':>10} {'new prior':>10} {'page cur':>10} {'new cur':>10}  $B")
     for g_old, g_new in zip(old["groups"], groups):
         flag = "" if (g_old["cur"], g_old["prior"], g_old["parts"]) == \
@@ -639,8 +758,21 @@ def update_hold(old, data, report):
 
 # ------------------------------------------------------------- 3. TIC
 
+# Table 5 row labels, matched exactly after trimming spaces
+TIC_GRAND = "Grand Total"
+TIC_OTHER = "All Other"
+TIC_OFFICIAL = "Of Which: Foreign Official"
+TIC_OFFICIAL_BONDS = "Of Which: Foreign Official T-Bonds & Notes"
+TIC_OFFICIAL_BILLS = ("Of Which: Foreign Official Treasury Bills", "Of Which: Foreign Official T-Bills")
+TIC_MAX_REVISION = 0.05     # an existing value changing by more than this share stops the update
+
+
 def parse_tic(text):
-    """Table 5 is tab-delimited: country, then 13 month columns headed YYYY-MM, newest first."""
+    """Table 5 is tab-delimited: label, then 13 month columns headed YYYY-MM, newest first.
+
+    Returns the months, {exact label: values}, the labels above Grand Total (countries and
+    All Other, in table order), and the release date if the header mentions one.
+    """
     lines = text.replace("\r", "").split("\n")
     head = None
     for i, line in enumerate(lines):
@@ -652,31 +784,23 @@ def parse_tic(text):
     if head is None:
         raise CheckFailed("TIC Table 5: no header row with 13 YYYY-MM columns")
     dates = [c for _, c in cols]
-    rows, order, official_seen = {}, [], False
+    rows, above = {}, []
     for line in lines[head + 1:]:
-        cells = [c.strip() for c in line.split("\t")]
-        name = re.sub(r"\s+", " ", cells[0]).strip().rstrip(":")
-        if not name:
+        cells = line.split("\t")
+        label = cells[0].strip()
+        if not label:
             continue
         try:
-            vals = [float(cells[j].replace(",", "")) for j, _ in cols]
+            vals = [float(cells[j].strip().replace(",", "")) for j, _ in cols]
         except (IndexError, ValueError):
             continue
-        key = name.lower()
-        if key == "grand total":
-            rows["Grand Total"] = vals
-        elif key.startswith("all other"):
-            rows["All Other"] = vals
-        elif "foreign official" in key:
-            rows["Foreign Official"] = vals
-            official_seen = True
-        elif "Grand Total" in rows or official_seen:
-            continue                        # bills / bonds lines under the official row
-        elif name not in rows:
-            rows[name] = vals
-            order.append(name)
+        if label in rows:
+            raise CheckFailed(f"TIC Table 5: row '{label}' appears twice")
+        rows[label] = vals
+        if TIC_GRAND not in rows:
+            above.append(label)
     release = parse_text_date("\n".join(lines[:head]))
-    return dates, rows, order, release
+    return dates, rows, above, release
 
 
 def tic_release_date(asof, report, old):
@@ -695,25 +819,48 @@ def tic_release_date(asof, report, old):
     return None
 
 
+def tic_view(obj):
+    """TIC with every value keyed by its month, so old and new can be compared month by month."""
+    d = obj["dates"]
+    yago = f"{int(obj['asof'][:4]) - 1}{obj['asof'][4:]}"
+    return {"asof": obj["asof"], "release": obj["release"], "countries": obj["countries"],
+            "v": {n: dict(zip(d, s)) for n, s in obj["v"].items()},
+            "allOther": dict(zip([obj["asof"], d[-2], yago], obj["allOther"]))}
+
+
 def update_tic(old, report):
     text = fetch(TIC_TABLE5)
-    dates, rows, order, release = parse_tic(text)
+    dates, rows, above, release = parse_tic(text)
     if dates[0] > dates[-1]:
         dates = dates[::-1]
         rows = {k: v[::-1] for k, v in rows.items()}
-    for need in ("Grand Total", "All Other", "Foreign Official"):
-        if need not in rows:
-            raise CheckFailed(f"TIC Table 5: no '{need}' row")
+    bills = [b for b in TIC_OFFICIAL_BILLS if b in rows]
+    missing = [r for r in (TIC_GRAND, TIC_OTHER, TIC_OFFICIAL, TIC_OFFICIAL_BONDS) if r not in rows]
+    if missing or len(bills) != 1:
+        below = [k for k in rows if k not in above and k != TIC_GRAND]
+        raise CheckFailed(f"TIC Table 5: expected rows not found exactly: "
+                          f"{missing + ([] if len(bills) == 1 else [' or '.join(TIC_OFFICIAL_BILLS)])}; "
+                          f"rows below Grand Total are {below}")
+    known = {TIC_GRAND, TIC_OTHER, TIC_OFFICIAL, TIC_OFFICIAL_BONDS, bills[0]}
+    extra = [k for k in rows if k not in above and k not in known]
+    if extra:
+        report.warn(f"TIC Table 5: rows not used: {extra}")
 
-    named = {n: rows[n] for n in order}
-    top20 = order[:20]
-    newcomers = [n for n in top20 if n not in old["countries"]]
+    # Foreign Official = its bills + its bonds and notes, every month read
+    fo, fb, fn = rows[TIC_OFFICIAL], rows[bills[0]], rows[TIC_OFFICIAL_BONDS]
+    off = [f"{d}: {o:,.1f} vs {b:,.1f} + {n:,.1f}" for d, o, b, n in zip(dates, fo, fb, fn)
+           if not close(o, b + n, 1.0)]
+    report.check(not off, f"TIC: Foreign Official equals its Treasury Bills + T-Bonds & Notes within $1B "
+                          f"for all {len(dates)} months", "; ".join(off))
+
+    countries = [k for k in above if k != TIC_OTHER]
+    newcomers = [n for n in countries[:20] if n not in old["countries"]]
     if newcomers:
         raise CheckFailed(f"TIC Table 5: new country in the top 20, not reshaping: {newcomers}. "
                           f"Update the country list by hand.")
-    missing = [c for c in old["countries"] if c not in named]
-    if missing:
-        raise CheckFailed(f"TIC Table 5: countries not found: {missing}")
+    absent = [c for c in old["countries"] if c not in rows]
+    if absent:
+        raise CheckFailed(f"TIC Table 5: countries not found under their exact names: {absent}")
 
     asof = dates[-1]
     if asof < old["asof"]:
@@ -726,15 +873,15 @@ def update_tic(old, report):
         for s in new["v"].values():
             s.append(None)
     pos = {d: i for i, d in enumerate(new["dates"])}
-    series = dict(named, **{"Grand Total": rows["Grand Total"], "Foreign Official": rows["Foreign Official"]})
+    source = {"Grand Total": TIC_GRAND, "Foreign Official": TIC_OFFICIAL}
     for name in new["v"]:
-        for d, v in zip(dates, series[name]):
+        for d, v in zip(dates, rows[source.get(name, name)]):
             if d in pos:
                 new["v"][name][pos[d]] = r1(v)
     gaps = [n for n, s in new["v"].items() if None in s]
     if gaps:
         raise CheckFailed(f"TIC: months between {old['asof']} and {asof} not covered by Table 5 for {gaps}")
-    ao = dict(zip(dates, rows["All Other"]))
+    ao = dict(zip(dates, rows[TIC_OTHER]))
     yago = f"{int(asof[:4]) - 1}{asof[4:]}"
     prev = dates[-2]
     if yago not in ao:
@@ -748,6 +895,18 @@ def update_tic(old, report):
             rel = nice_date(dt.date.today())
         new["release"] = rel
 
+    # ---- revisions: an existing value moving by more than 5% stops the update
+    ov, nv = tic_view(old), tic_view(new)
+    big, revised = [], 0
+    for path, o, n in changes(ov, nv, "TIC"):
+        if not isinstance(o, (int, float)) or not isinstance(n, (int, float)):
+            continue
+        revised += 1
+        if abs(n - o) > TIC_MAX_REVISION * abs(o) or (o == 0 and n != 0):
+            big.append(f"{path}: {o:,.1f} -> {n:,.1f}")
+    report.check(not big, f"TIC: no existing value revised by more than {TIC_MAX_REVISION:.0%}",
+                 "; ".join(big))
+
     # ---- checks
     n = len(new["dates"])
     report.check(all(len(s) == n for s in new["v"].values()), "TIC: every series has the same length as dates")
@@ -759,11 +918,7 @@ def update_tic(old, report):
     if new == old:
         report.say(f"TIC: no new month and no revisions (page {old['asof']}).")
         return None
-    revised = sum(1 for name in old["v"] for a, b in zip(old["v"][name], new["v"][name]) if a != b)
-    report.say(f"TIC: newest month {asof} (page had {old['asof']}); {revised} earlier values revised.")
-    for name in ("Grand Total", "Japan", "United Kingdom", "China, Mainland", "Foreign Official"):
-        report.say(f"  {name:<20} {old['v'][name][-1]:>9,.1f} ({old['asof']}) -> "
-                   f"{new['v'][name][-1]:>9,.1f} ({asof}) $B")
+    report.say(f"TIC: newest month {asof} (page had {old['asof']}); {revised} existing values revised.")
     return new
 
 
@@ -842,6 +997,57 @@ def summary(objs):
     }
 
 
+# ------------------------------------------------------- change listing
+
+def view(name, obj):
+    """A form of each object in which values are keyed by month, quarter, name or label."""
+    if name == "TIC":
+        return tic_view(obj)
+    if name == "HOLD":
+        v = dict(obj)
+        for k in ("held", "disc", "z1mkt", "mspdMkt", "public"):
+            v[k] = dict(zip([obj["prior"], obj["asof"]], obj[k]))
+        return v
+    return obj
+
+
+def keyed(items):
+    if items and all(isinstance(x, dict) and "name" in x for x in items):
+        return {x["name"]: {k: v for k, v in x.items() if k != "name"} for x in items}
+    if items and all(isinstance(x, list) and x and isinstance(x[0], str) for x in items):
+        return {x[0]: (x[1] if len(x) == 2 else x[1:]) for x in items}
+    return None
+
+
+def changes(old, new, path):
+    """Yield (path, old value, new value) for every leaf value that differs; None means absent."""
+    if isinstance(old, dict) and isinstance(new, dict):
+        for k in list(old) + [k for k in new if k not in old]:
+            yield from changes(old.get(k), new.get(k), f"{path}.{k}")
+        return
+    if isinstance(old, list) and isinstance(new, list):
+        ko, kn = keyed(old), keyed(new)
+        if ko is not None and kn is not None:
+            yield from changes(ko, kn, path)
+        else:
+            for i in range(max(len(old), len(new))):
+                yield from changes(old[i] if i < len(old) else None, new[i] if i < len(new) else None,
+                                   f"{path}[{i}]")
+        return
+    if old != new:
+        yield path, old, new
+
+
+def fmt(v):
+    if v is None:
+        return "(none)"
+    if isinstance(v, float):
+        return f"{v:,.1f}"
+    if isinstance(v, (dict, list)):
+        return dump(v)
+    return str(v)
+
+
 # -------------------------------------------------------------- main
 
 def main():
@@ -850,6 +1056,9 @@ def main():
     ap.add_argument("--check", action="store_true", help="validate index.html without network access")
     ap.add_argument("--message-file", help="write the commit message here when something changed")
     ap.add_argument("--report-file", help="also write the report here (e.g. the GitHub job summary)")
+    ap.add_argument("--alert-file", help="write non-blocking problems that need a person here")
+    ap.add_argument("--hold", choices=("auto", "always"), default="auto",
+                    help="auto: read Z.1 only when a new release is due (default); always: read it anyway")
     args = ap.parse_args()
 
     report = Report()
@@ -868,11 +1077,25 @@ def main():
         else:
             new = dict(objs)
             changed = []
+            hold = objs["HOLD"]
             for name, fn in (("DATA", lambda: update_data(objs["DATA"], report)),
-                             ("HOLD", lambda: update_hold(objs["HOLD"], new["DATA"], report)),
+                             ("HOLD", lambda: update_hold(hold, new["DATA"], report)),
                              ("TIC", lambda: update_tic(objs["TIC"], report))):
+                if name == "HOLD" and args.hold == "auto" and not hold_due(hold):
+                    report.say(f"HOLD: skipped; no new Z.1 release due until {hold['next']} "
+                               f"(page has the {hold['release']} release).")
+                    report.say()
+                    continue
                 try:
                     result = fn()
+                except SourceUnavailable as e:
+                    if name != "HOLD":
+                        report.check(False, f"{name}: {e}")
+                    else:           # keep the current HOLD so DATA and TIC can still update
+                        msg = f"HOLD not updated, kept the current values: {e}"
+                        report.warn(msg)
+                        report.alerts.append(msg)
+                    result = None
                 except CheckFailed as e:
                     report.check(False, f"{name}: {e}")
                     result = None
@@ -883,6 +1106,11 @@ def main():
             if changed:
                 new_page = rebuild_page(page, new)
                 check_page(page, new_page, report)
+                listed = [(p, o, n) for name in changed
+                          for p, o, n in changes(view(name, objs[name]), view(name, new[name]), name)]
+                report.say(f"Every value that changes ({len(listed)}; old -> new):")
+                for p, o, n in listed:
+                    report.say(f"  {p}: {fmt(o)} -> {fmt(n)}")
             sm = summary(new)
             try:
                 with open(SUMMARY, encoding="utf-8") as f:
@@ -909,6 +1137,9 @@ def main():
         report.say("Nothing was written because a check failed.")
     out = report.render()
     print(out)
+    if args.alert_file and report.alerts:
+        with open(args.alert_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(report.alerts) + "\n")
     if args.report_file:
         with open(args.report_file, "a", encoding="utf-8") as f:
             f.write("```\n" + out + "\n```\n")

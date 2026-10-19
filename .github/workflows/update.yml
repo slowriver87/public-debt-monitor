@@ -10,6 +10,10 @@ on:
         description: "Dry run: fetch and check, show what would change, commit nothing"
         type: boolean
         default: true
+      check_holders:
+        description: "Read Z.1 holder data even if no new release is due"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -25,6 +29,7 @@ jobs:
     timeout-minutes: 20
     env:
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+      HOLD_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.check_holders && 'always' || 'auto' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -36,16 +41,19 @@ jobs:
         if: env.DRY_RUN == 'true'
         run: |
           status=0
-          python scripts/update.py --dry-run --report-file "$RUNNER_TEMP/report.md" || status=$?
+          python scripts/update.py --dry-run --hold "$HOLD_MODE" --report-file "$RUNNER_TEMP/report.md" || status=$?
           { echo "## Dry run"; cat "$RUNNER_TEMP/report.md" 2>/dev/null || true; } >> "$GITHUB_STEP_SUMMARY"
           exit $status
 
       - name: Fetch, check and rebuild
+        id: update
         if: env.DRY_RUN != 'true'
         run: |
           status=0
-          python scripts/update.py --message-file "$RUNNER_TEMP/message.txt" --report-file "$RUNNER_TEMP/report.md" || status=$?
+          python scripts/update.py --hold "$HOLD_MODE" --message-file "$RUNNER_TEMP/message.txt" \
+            --report-file "$RUNNER_TEMP/report.md" --alert-file "$RUNNER_TEMP/alert.txt" || status=$?
           { echo "## Update"; cat "$RUNNER_TEMP/report.md" 2>/dev/null || true; } >> "$GITHUB_STEP_SUMMARY"
+          if [ -s "$RUNNER_TEMP/alert.txt" ]; then echo "alert=true" >> "$GITHUB_OUTPUT"; fi
           exit $status
 
       - name: Commit if anything changed
@@ -64,14 +72,20 @@ jobs:
           git commit -F "$RUNNER_TEMP/message.txt"
           git push
 
-      - name: Open or update an issue when a check fails
-        if: failure() && env.DRY_RUN != 'true'
+      - name: Open or update an issue when a check fails or holder data could not be read
+        if: always() && env.DRY_RUN != 'true' && (failure() || steps.update.outputs.alert == 'true')
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FAILED: ${{ job.status == 'failure' }}
         run: |
-          title="Data update failed"
-          { echo "The scheduled update stopped and nothing was committed. Run: $RUN_URL"; echo
+          title="Data update needs attention"
+          if [ "$FAILED" = "true" ]; then
+            lead="The update stopped and nothing was committed."
+          else
+            lead="Holder data (Z.1) could not be read, so HOLD kept its current values. Any other updates were committed."
+          fi
+          { echo "$lead Run: $RUN_URL"; echo
             cat "$RUNNER_TEMP/report.md" 2>/dev/null || true; } > "$RUNNER_TEMP/issue.md"
           number=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
           if [ -n "$number" ]; then
