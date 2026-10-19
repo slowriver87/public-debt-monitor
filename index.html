@@ -1,0 +1,963 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Public Debt Monitor</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a single reading column (max 1180px). Summary tiles first, then the long-run split chart,
+   the monthly flow chart, the statement table beside the marketable mix, then the trust-fund ledger. */
+:root {
+  --bg: #f2f4f7;          /* cool paper */
+  --card: #ffffff;
+  --fg: #141d27;
+  --muted: #5a6875;
+  --faint: #8b97a3;
+  --line: #d9dfe6;
+  --grid: #e8ecf0;
+  --pub: #2a78d6;         /* debt held by the public */
+  --gov: #eb6834;         /* intragovernmental holdings */
+  --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4;
+  --good: #1e7f3a; --bad: #c0392b;
+  --font-sans: "Libre Franklin", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101519; --card: #181f26; --fg: #edf1f4; --muted: #a3afba; --faint: #76838f;
+    --line: #2b3640; --grid: #222b34; --pub: #3987e5; --gov: #e0602b;
+    --s3: #199e70; --s4: #c98500; --s5: #d55181; --good: #4cc26a; --bad: #ef6b5c;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101519; --card: #181f26; --fg: #edf1f4; --muted: #a3afba; --faint: #76838f;
+  --line: #2b3640; --grid: #222b34; --pub: #3987e5; --gov: #e0602b;
+  --s3: #199e70; --s4: #c98500; --s5: #d55181; --good: #4cc26a; --bad: #ef6b5c;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-sans); font-size: 14px; line-height: 1.45; margin: 0; }
+.wrap { max-width: 1180px; margin: 0 auto; padding-inline: 16px; padding-block: 28px 48px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; }
+h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 15px; font-weight: 600; }
+.eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.sub { color: var(--muted); font-size: 13px; }
+a { color: var(--pub); }
+header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; justify-content: space-between; margin-bottom: 20px; }
+header .sub { text-wrap: pretty; }
+.disclaimer { margin: -6px 0 16px; padding: 10px 14px; border-radius: 6px; background: #163a6b; color: #ffffff; font-size: 13px; text-wrap: pretty; }
+.disclaimer b { color: #ffffff; font-weight: 700; }
+header .meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); font-size: 12px; color: var(--muted); background: var(--card); }
+.pill b { color: var(--fg); font-weight: 600; }
+
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; align-content: start; }
+.tile { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.tile .label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.tile .value { font-size: 30px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; }
+.tile.hero .value { font-size: 48px; }
+.tile .delta { font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; font-variant-numeric: tabular-nums; }
+.tile .delta b { font-weight: 600; color: var(--fg); }
+.tile svg { width: 100%; height: 34px; display: block; margin-top: 4px; }
+.swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: none; }
+
+.stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 22px; align-content: start; }
+.stat { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; min-width: 0; display: flex; flex-direction: column; }
+.stat .k { font-size: 11px; color: var(--muted); min-height: 2.8em; display: flex; align-items: flex-end; }
+.stat .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat .d { font-size: 11px; color: var(--muted); }
+
+section.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; margin-bottom: 16px; min-width: 0; }
+.card-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+.card-head .sub { max-width: none; }
+.controls { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin-bottom: 8px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { background: transparent; border: 0; color: var(--muted); font: inherit; font-size: 12px; padding: 5px 10px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+.seg button:focus-visible { outline: 2px solid var(--pub); outline-offset: -2px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.chart { position: relative; width: 100%; overflow-x: auto; overflow-y: hidden; }
+.chart svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart .vlab { paint-order: stroke; stroke: var(--card); stroke-width: 4px; stroke-linejoin: round; }
+.chart text { font-family: var(--font-sans); font-size: 11px; fill: var(--muted); }
+.chart .grid line { stroke: var(--grid); stroke-width: 1; }
+.chart .axis line { stroke: var(--line); }
+.tip { position: absolute; pointer-events: none; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); min-width: 170px; z-index: 2; display: none; }
+.tip .t { font-weight: 600; margin-bottom: 4px; }
+.tip .r { display: flex; justify-content: space-between; gap: 14px; font-variant-numeric: tabular-nums; }
+.tip .r span:first-child { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+
+.two { display: grid; grid-template-columns: 1.25fr 1fr; gap: 16px; margin-bottom: 16px; }
+.two > section.card { margin-bottom: 0; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; font-variant-numeric: tabular-nums; table-layout: fixed; }
+#t1 { min-width: 592px; }
+#t1 th { white-space: normal; vertical-align: bottom; }
+#t24 { min-width: 520px; }
+#t24 th, #t24 td { padding-inline: 4px; }
+.two.even { grid-template-columns: 1fr 1fr; align-items: start; }
+col.c-txt { width: auto; }
+th, td { padding: 5px 6px; text-align: right; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { font-weight: 600; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+th:first-child, td:first-child { text-align: left; }
+td.num { font-family: var(--font-mono); font-size: 12px; }
+tr.group td { color: var(--muted); font-weight: 600; border-bottom: 0; padding-top: 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+tr.total td { font-weight: 600; border-top: 1px solid var(--line); }
+tr.grand td { font-weight: 700; border-top: 2px solid var(--fg); border-bottom: 0; }
+td.indent { padding-left: 20px; }
+.pos { color: var(--good); } .neg { color: var(--bad); }
+
+.holders { display: grid; gap: 6px; }
+.holder { display: grid; grid-template-columns: minmax(170px, 1.7fr) minmax(100px, 1.3fr) 76px 76px; gap: 10px; align-items: center; font-size: 12.5px; }
+.holder .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.holder.sum .n { white-space: normal; }
+.holder .n small { display: block; color: var(--faint); font-size: 10.5px; }
+.holder .bar { height: 14px; background: var(--grid); border-radius: 0 4px 4px 0; position: relative; }
+.holder .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--gov); border-radius: 0 4px 4px 0; }
+.holder .bar.ss i { background: var(--gov); }
+.holder .bar.med i { background: var(--s4); }
+.holder .bar.ret i { background: var(--s5); }
+.holder .bar.oth i { background: var(--faint); }
+.holder .v, .holder .f { font-family: var(--font-mono); font-size: 12px; text-align: right; }
+.holder.head { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+.holder.head .v, .holder.head .f { font-family: var(--font-sans); font-size: 11px; }
+.grouplegend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); margin-top: 10px; }
+.grouplegend span { display: inline-flex; align-items: center; gap: 6px; }
+
+.meter { margin-top: 8px; }
+.meter .track { height: 18px; border-radius: 4px; background: color-mix(in srgb, var(--pub) 18%, var(--card)); position: relative; overflow: hidden; }
+.meter .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--pub); }
+.meter .marks { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.kv { display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; font-size: 12.5px; margin-top: 10px; font-variant-numeric: tabular-nums; }
+.kv .k { color: var(--muted); } .kv .v { font-family: var(--font-mono); font-size: 12px; text-align: right; white-space: nowrap; }
+.kv .total { font-weight: 600; border-top: 1px solid var(--line); padding-top: 4px; }
+.kv .k.total { white-space: nowrap; }
+
+details { margin-top: 6px; }
+.learn .prose { max-width: none; columns: 2; column-gap: 36px; }
+.learn .sec { break-inside: avoid; }
+.learn h3 { font-size: 14px; font-weight: 600; margin: 0 0 6px; }
+.learn .sec + .sec { margin-top: 18px; }
+.learn p, .learn li { font-size: 13.5px; line-height: 1.55; margin: 0 0 8px; }
+.learn ul { padding-left: 18px; margin: 0 0 8px; }
+.learn .n { font-family: var(--font-mono); font-size: 12.5px; background: color-mix(in srgb, var(--gov) 12%, var(--card)); padding: 0 4px; border-radius: 3px; white-space: nowrap; }
+.learn .eq { font-family: var(--font-mono); font-size: 12.5px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; line-height: 1.7; overflow-x: auto; }
+.quiz { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 8px; }
+.quiz ol { columns: 2; column-gap: 36px; }
+.quiz li { break-inside: avoid; }
+.quiz ol { padding-left: 20px; margin: 8px 0 0; }
+.quiz li { font-size: 13.5px; margin-bottom: 8px; }
+.quiz .a { display: block; color: var(--muted); margin-top: 3px; }
+.quiz .a::before { content: "Answer: "; font-weight: 600; color: var(--fg); }
+.lesson[hidden] { display: none; }
+
+summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.notes { font-size: 12.5px; color: var(--muted); }
+.notes p { margin: 6px 0; }
+footer { color: var(--muted); font-size: 12px; margin-top: 24px; }
+footer p { margin: 4px 0; }
+footer .srcs ul { margin: 4px 0 0; padding-left: 18px; columns: 2; column-gap: 32px; }
+footer .srcs li { break-inside: avoid; margin-bottom: 2px; }
+@media (max-width: 560px) { footer .srcs ul { columns: 1; } }
+
+.hstack { display: flex; height: 30px; border-radius: 5px; overflow: hidden; gap: 1px; background: var(--line); margin: 4px 0 8px; }
+.hstack > div { min-width: 1px; }
+.hatch { background: repeating-linear-gradient(45deg, var(--faint) 0 3px, var(--card) 3px 7px); }
+.hatch2 { background: repeating-linear-gradient(-45deg, var(--bad) 0 2px, var(--card) 2px 6px); }
+.nontr { background: color-mix(in srgb, var(--faint) 45%, var(--card)); }
+.hleg { margin-bottom: 10px; }
+.hleg .swatch.hatch, .hleg .swatch.hatch2 { background-size: auto; }
+#wh-t { min-width: 600px; }
+#wh-t td.b span { display: block; height: 12px; border-radius: 0 3px 3px 0; }
+#wh-t tr.hasnote td { border-bottom: 0; padding-bottom: 1px; }
+#wh-t tr.pnote td { color: var(--faint); font-size: 11.5px; padding-top: 0; padding-left: 24px; text-align: left; white-space: normal; }
+#wh-t tr.sub td { font-weight: 600; border-top: 1px solid var(--line); }
+#wh-t tr.recon td:first-child { color: var(--muted); }
+#fh-t { min-width: 440px; }
+#fh-t td:nth-child(2), #fh-t th:nth-child(2) { text-align: left; }
+#fh-t td:nth-child(2) { overflow: hidden; text-overflow: ellipsis; }
+#fh-t .rk { color: var(--faint); }
+#fh-t tr.oth td { border-top: 1px solid var(--line); }
+#fh-t tr.of td { color: var(--muted); }
+.two.fh { grid-template-columns: 1fr 1.35fr; align-items: start; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 10px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px 3px 8px; font: inherit; font-size: 12px; cursor: pointer; background: var(--card); color: var(--faint); }
+.chip i { width: 9px; height: 9px; border-radius: 50%; background: var(--grid); }
+.chip[aria-pressed="true"] { color: var(--fg); border-color: var(--c); }
+.chip[aria-pressed="true"] i { background: var(--c); }
+.chip:focus-visible { outline: 2px solid var(--pub); outline-offset: 1px; }
+#c-fh .elab { paint-order: stroke; stroke: var(--card); stroke-width: 4px; stroke-linejoin: round; font-weight: 600; }
+@media (max-width: 980px) { .two.fh { grid-template-columns: 1fr; } }
+@media (max-width: 700px) { #c-fh svg { min-width: 620px; } }
+
+@media (max-width: 980px) {
+  .tiles { grid-template-columns: repeat(2, 1fr); }
+  .stats { grid-template-columns: repeat(6, 1fr); }
+  .stat { grid-column: span 2; }
+  .stat:nth-child(4), .stat:nth-child(5) { grid-column: span 3; }
+  .two, .two.even { grid-template-columns: 1fr; }
+  .tile.hero .value { font-size: 38px; }
+  .learn .prose, .quiz ol { columns: 1; }
+}
+@media (max-width: 700px) {
+  #c-main svg, #c-flow svg { min-width: 640px; }
+  #c-mix svg { min-width: 460px; }
+}
+@media (max-width: 560px) {
+  .tiles { grid-template-columns: 1fr; }
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .stat, .stat:nth-child(4), .stat:nth-child(5) { grid-column: span 1; }
+  .stat:last-child { grid-column: 1 / -1; }
+  .tile .value { font-size: 26px; }
+  .holder { grid-template-columns: 1fr 64px 64px; gap: 2px 8px; row-gap: 2px; }
+  .holder:not(.head) .n { grid-column: 1 / -1; }
+  .holder.head .n, .holder.head > div:first-child { grid-column: 1; }
+  .holder.head > div:nth-child(2) { display: none; }
+  .holder .bar { height: 10px; }
+  .holders { gap: 10px; }
+}
+@media (prefers-reduced-motion: no-preference) { .seg button { transition: background .15s, color .15s; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div>
+    <div class="eyebrow">Treasury debt statement · Fed Financial Accounts · Treasury TIC data</div>
+    <h1>Public Debt Monitor</h1>
+    <div class="sub">How much the U.S. Treasury owes, who it owes it to, and how that is changing: the public versus federal trust funds, the Fed versus foreign and domestic buyers, and room under the debt limit.</div>
+  </div>
+  <div class="meta">
+    <span class="pill">Debt statement <b id="asof"></b></span>
+    <span class="pill">Holders <b id="asof-h"></b></span>
+    <span class="pill">Foreign <b id="asof-f"></b></span>
+    <span class="pill">Series <b id="span"></b></span>
+    <a class="pill" href="https://fiscaldata.treasury.gov/datasets/monthly-statement-public-debt/summary-of-treasury-securities-outstanding" target="_blank" rel="noopener">Source: Fiscal Data ↗</a>
+  </div>
+</header>
+
+<p class="disclaimer"><b>For education only. Not financial advice.</b> Figures come from public government sources and are checked, but may contain errors. Check the original source before relying on it.</p>
+
+<div class="tiles" id="tiles"></div>
+<div class="stats" id="stats"></div>
+
+<section class="card">
+  <div class="card-head">
+    <div>
+      <h2>Debt held by the public vs. intragovernmental holdings</h2>
+      <div class="sub">Month-end levels since March 2001. Intragovernmental holdings are Treasury securities owned by federal trust funds and accounts (Social Security, Medicare, federal retirement), so they net out of the government's consolidated balance sheet; public debt is what the market, the Fed and foreign holders finance.</div>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="seg" id="range" role="group" aria-label="Time range">
+      <button data-r="36">3Y</button><button data-r="60">5Y</button><button data-r="120">10Y</button><button data-r="0" aria-pressed="true">All</button>
+    </div>
+    <div class="seg" id="mode" role="group" aria-label="Measure">
+      <button data-m="level" aria-pressed="true">Level</button><button data-m="yoy">12-month change</button><button data-m="pct">12-month % change</button>
+    </div>
+    <div class="legend"><span><i class="swatch" style="background:var(--pub)"></i>Debt held by the public</span><span><i class="swatch" style="background:var(--gov)"></i>Intragovernmental holdings</span><span id="legend-total"><i class="swatch" style="background:var(--fg)"></i>Total</span></div>
+  </div>
+  <div class="chart" id="c-main"></div>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <div>
+      <h2>Monthly change in debt outstanding</h2>
+      <div class="sub">Net change in month-end balances, last 36 months. Public-debt bars are net issuance to the market; intragovernmental bars are trust-fund investment (surplus) or redemption (shortfall). Tax months show up as dips in public debt (April 2025: −$57B; April 2026: −$159B), and the 2025 debt-limit standoff as six flat months of total debt (January to June 2025).</div>
+    </div>
+    <div class="legend"><span><i class="swatch" style="background:var(--pub)"></i>Public</span><span><i class="swatch" style="background:var(--gov)"></i>Intragovernmental</span></div>
+  </div>
+  <div class="chart" id="c-flow"></div>
+</section>
+
+<div class="two">
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>Table I · Summary of Treasury securities outstanding</h2>
+        <div class="sub" id="t1-sub">Millions of dollars. Change column is versus the prior month-end statement.</div>
+      </div>
+    </div>
+    <div class="tablewrap"><table id="t1"></table></div>
+  </section>
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>Marketable mix</h2>
+        <div class="sub">Share of marketable debt by security type. Bills are under one year; a rising bill share means Treasury is leaning on the front end.</div>
+      </div>
+    </div>
+    <div class="legend" id="mix-legend"></div>
+    <div class="chart" id="c-mix"></div>
+    <div class="kv" id="mix-kv"></div>
+  </section>
+</div>
+
+<div class="two even">
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>Who holds the intragovernmental debt</h2>
+        <div class="sub" id="hold-sub">Government Account Series by fund, from Table III of the statement. Net flow is the month's issued less redeemed: a negative number means the fund redeemed more securities than it bought that month.</div>
+      </div>
+    </div>
+    <div class="holders" id="holders"></div>
+    <div class="grouplegend"><span><i class="swatch" style="background:var(--gov)"></i>Social Security</span><span><i class="swatch" style="background:var(--s4)"></i>Medicare</span><span><i class="swatch" style="background:var(--s5)"></i>Federal &amp; military retirement</span><span><i class="swatch" style="background:var(--faint)"></i>Other funds</span></div>
+  </section>
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>Table II · Statutory debt limit</h2>
+        <div class="sub">Debt subject to limit against the current ceiling.</div>
+      </div>
+    </div>
+    <div class="meter" id="meter"></div>
+    <div class="kv" id="limit-kv"></div>
+    <details>
+      <summary>What is not subject to the limit</summary>
+      <div class="notes" id="limit-notes"></div>
+    </details>
+    <div class="card-head" style="margin-top:18px"><div><h2>Last 24 months</h2><div class="sub">Month-end levels, millions.</div></div></div>
+    <div class="tablewrap"><table id="t24"></table></div>
+  </section>
+</div>
+
+<section class="card" id="whohold">
+  <div class="card-head">
+    <div>
+      <h2>Who holds the public debt</h2>
+      <div class="sub" id="wh-sub"></div>
+    </div>
+  </div>
+  <div class="hstack" id="wh-bar" role="img" aria-label="Debt held by the public, split by holder"></div>
+  <div class="legend hleg" id="wh-leg"></div>
+  <div class="tablewrap"><table id="wh-t"></table></div>
+  <div class="notes" id="wh-notes"></div>
+</section>
+
+<div class="two fh">
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>Foreign holders by country</h2>
+        <div class="sub" id="fh-sub"></div>
+      </div>
+    </div>
+    <div class="tablewrap"><table id="fh-t"></table></div>
+    <div class="notes"><p><b>Custody location isn't ownership.</b> Treasury's figures count where the securities are held, which isn't always who owns them. Belgium, Luxembourg, the Cayman Islands and the UK are large custody and fund centers. China, for example, is widely believed to hold some Treasuries through Belgium (Brad Setser, Council on Foreign Relations, 2016).</p></div>
+  </section>
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>How foreign holdings have moved</h2>
+        <div class="sub">Month-end holdings since January 2014. Click a country to add or remove it.</div>
+      </div>
+    </div>
+    <div class="controls">
+      <div class="seg" id="fh-mode" role="group" aria-label="Measure"><button data-m="lvl" aria-pressed="true">$ billions</button><button data-m="sh" aria-pressed="false">Share of foreign total</button></div>
+      <div class="seg" id="fh-quick" role="group" aria-label="Quick select"><button data-q="top5">Top 5</button><button data-q="all">All 20</button><button data-q="none">Clear</button></div>
+    </div>
+    <div class="chips" id="fh-chips"></div>
+    <div class="chart" id="c-fh"></div>
+    <div class="notes"><p>Dashed line: March 2023, when Treasury switched its country estimates from monthly purchase-and-sale reports to monthly holdings reports. Readings before and after are close but not strictly comparable.</p></div>
+  </section>
+</div>
+
+<section class="card learn" id="learn">
+  <div class="card-head">
+    <div>
+      <div class="eyebrow">Field guide</div>
+      <h2>How intragovernmental debt works</h2>
+      <div class="sub">Three levels, meant to be read in order over time. Level 1 gives you the model; Level 2 the plumbing behind the numbers on this page; Level 3 the way a fiscal analyst reads them. Figures in the text update with the statement.</div>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="seg" id="lvl" role="tablist" aria-label="Level">
+      <button data-l="1" role="tab" aria-pressed="true">Level 1 · Foundations</button><button data-l="2" role="tab" aria-pressed="false">Level 2 · Mechanics</button><button data-l="3" role="tab" aria-pressed="false">Level 3 · Analyst's view</button>
+    </div>
+  </div>
+
+  <div class="lesson" id="lesson-1">
+    <div class="prose">
+      <div class="sec">
+      <h3>1. Two kinds of lender</h3>
+      <p>Every Treasury security has an owner. When the owner is outside the federal government (a bank, a pension fund, a foreign central bank, a household, the Federal Reserve) it is <b>debt held by the public</b>. When the owner is another part of the federal government it is an <b>intragovernmental holding</b>. Today that split is <span class="n" data-f="pub"></span> public and <span class="n" data-f="gov"></span> intragovernmental, for a total of <span class="n" data-f="tot"></span>.</p>
+      <p>The intragovernmental owners are federal <b>trust funds and accounts</b>. The four largest in the latest statement are Social Security's Old-Age and Survivors Insurance fund, the Military Retirement Fund, the Civil Service Retirement and Disability Fund, and the DoD Medicare-Eligible Retiree Health Care Fund. Medicare's Hospital Insurance fund is fifth. The bar chart above lists them.</p>
+      </div>
+
+      <div class="sec">
+      <h3>2. Why a trust fund owns Treasuries at all</h3>
+      <p>Take Social Security. Payroll taxes come in every day. Benefits go out every month. By law, income to the trust funds must be invested daily in securities guaranteed as to principal and interest by the federal government (SSA, Trust Fund FAQs); in practice they hold special-issue Treasury securities. So Treasury takes the cash, spends it on whatever the government is spending on, and hands the trust fund a security in return. That security is the IOU. The cash is gone; the claim remains.</p>
+      <p>A household version: you keep a jar labeled "retirement," but instead of leaving money in it you spend the money on this month's bills and put a signed note in the jar for the same amount. The jar's balance is real to you in the sense that you owe it. It is not real in the sense that nobody outside your house is out any money yet.</p>
+      </div>
+
+      <div class="sec">
+      <h3>3. What each total is good for</h3>
+      <ul>
+        <li><b>Debt held by the public</b> is what the government has borrowed from everyone else. It is what the market has to absorb, what drives interest costs that leave the government, and the number economists compare to GDP.</li>
+        <li><b>Intragovernmental holdings</b> is what one part of the government owes another. It nets out of any consolidated view, but it is a promise: benefits that will have to be paid with real cash later.</li>
+        <li><b>Total public debt outstanding</b> (gross debt) is the sum. Almost all of it counts against the statutory debt limit (<span class="n" data-f="subj"></span> of <span class="n" data-f="tot"></span> in Table II), which is why the ceiling bites on the trust funds too (Level 2).</li>
+      </ul>
+      </div>
+
+      <div class="sec">
+      <h3>4. The one-sentence model</h3>
+      <p>Intragovernmental debt is public debt that has been deferred. When a trust fund needs cash it redeems its securities, Treasury raises the cash by borrowing from the public, and the amount moves from the orange band to the blue band on the chart above. The total does not change; who is owed does.</p>
+      </div>
+    </div>
+    <details class="quiz"><summary>Check your understanding</summary>
+      <ol>
+        <li>The Federal Reserve holds trillions of dollars of Treasuries. Which band is it in? <span class="a">Public. The Fed is independent of the Treasury; its holdings are debt held by the public even though its profits are remitted to Treasury.</span></li>
+        <li>Social Security's two trust funds hold <span class="n" data-f="ss"></span>. Is that cash? <span class="a">No. It is Treasury securities. The cash was spent when it came in; the balance is a claim on future general revenue.</span></li>
+        <li>If OASI redeems $40B of securities to pay benefits and Treasury borrows $40B from the public to cover it, what happens to total debt? <span class="a">Nothing. Public rises $40B, intragovernmental falls $40B, total is unchanged.</span></li>
+      </ol>
+    </details>
+  </div>
+
+  <div class="lesson" id="lesson-2" hidden>
+    <div class="prose">
+      <div class="sec">
+      <h3>1. The instrument: Government Account Series</h3>
+      <p>Trust funds do not buy the same bills, notes and bonds the market buys. They receive <b>Government Account Series (GAS)</b> securities: nonmarketable and never traded. In Table I, GAS is the line that carries almost all of the intragovernmental column (<span class="n" data-f="gasgov"></span> of <span class="n" data-f="gov"></span>); the remaining sliver is marketable securities that a few accounts hold directly.</p>
+      <p>Two flavors exist. <b>Special issues</b> (Social Security, Medicare) carry an interest rate set by formula: the average market yield on marketable Treasuries with four or more years to maturity, rounded to the nearest eighth of a percent, fixed each month for that month's purchases. <b>Market-based</b> GAS (used by many other accounts) mirror the price and yield of a comparable marketable security. Special issues carry no market risk: SSA notes they can be redeemed at any time at face value, a privilege no outside investor has. Market-based GAS are priced like the security they mirror, so their value moves with the market.</p>
+      </div>
+
+      <div class="sec">
+      <h3>2. Issued and redeemed: the daily churn</h3>
+      <p>Table III shows each fund's securities issued and redeemed during the month, and the numbers are enormous relative to the balances. The Military Retirement Fund issued <span class="n" data-f="milIss"></span> and redeemed <span class="n" data-f="milRed"></span> in one month against a <span class="n" data-f="milCur"></span> balance. The gross figures are many times the net change. What matters is the <b>net</b>: issued minus redeemed, which is the fund's cash surplus or deficit for the month. For Social Security's OASI fund it was <span class="n" data-f="oasiNet"></span>; a negative number means the fund redeemed more than it took in that month.</p>
+      </div>
+
+      <div class="sec">
+      <h3>3. Interest is paid in more IOUs</h3>
+      <p>When Treasury owes a trust fund interest, it does not send cash. It credits the fund with more GAS. Social Security's special issues are credited with interest every June 30 and December 31, in new securities (CRS, RS20607). Intragovernmental holdings rose $88.7B in June 2026 and $45.2B in December 2025; the exception was June 2025 (−$5.4B), during the debt-limit standoff. October jumps are larger still (+$222.1B in October 2024, +$109.6B in October 2025). This means intragovernmental holdings can keep growing even while a fund runs a cash deficit, as long as interest credited exceeds the shortfall. It also means the interest never leaves the government: it is an accounting entry, not a payment to anyone outside.</p>
+      </div>
+
+      <div class="sec">
+      <h3>4. Where the debt limit comes in</h3>
+      <p>The statutory limit applies to gross debt, so every dollar a trust fund invests counts against the ceiling. When Treasury runs out of room it uses "extraordinary measures." Treasury's January 2025 list includes suspending or redeeming investments of the Civil Service Retirement fund and the Postal Service Retiree Health Benefits Fund, suspending reinvestment of the TSP G Fund and the Exchange Stabilization Fund, and suspending sales of State and Local Government Series securities. The G Fund sits in the public column, so a standoff shows in both columns. Afterward the CSRDF, PSRHBF and G Fund are made whole; the ESF is not reimbursed for lost interest. In the monthly chart, total debt was flat from January to June 2025, then rose $706B in July.</p>
+      </div>
+
+      <div class="sec">
+      <h3>5. Budget accounting: unified, on-budget, off-budget</h3>
+      <p>Social Security is legally "off-budget," yet the headline deficit everyone quotes is the <b>unified</b> deficit, which includes it. When the trust funds ran surpluses they made the unified deficit look smaller than the rest of the government's borrowing. The Trustees say Social Security's total cost has exceeded its total income every year since 2021 (2025 Trustees summary), so the trust funds' shortfalls now add to what must be borrowed from the public.</p>
+      </div>
+
+      <div class="sec">
+      <h3>6. A wrinkle: GAS held by the public</h3>
+      <p>Table I also shows <span class="n" data-f="gasPub"></span> of Government Account Series in the <em>public</em> column. Most of it is the Thrift Savings Plan's G Fund (<span class="n" data-f="tsp"></span>). It is issued like intragovernmental debt but the beneficial owners are federal employees, who are members of the public, so it counts as public debt. Suspending its reinvestment is one of Treasury's extraordinary measures in a standoff (Treasury, January 2025).</p>
+      </div>
+    </div>
+    <details class="quiz"><summary>Check your understanding</summary>
+      <ol>
+        <li>A fund shows $100B issued and $95B redeemed. What is its cash position for the month? <span class="a">A $5B surplus. The gross figures are rollover; the net is what the fund actually added to its holdings.</span></li>
+        <li>Why do intragovernmental holdings rise in June and December even in a fund that is running a deficit? <span class="a">Interest is credited semiannually, in new securities, on those dates.</span></li>
+        <li>Why do debt-limit standoffs show up in the intragovernmental column as well as the public one? <span class="a">The cap binds on the total, so both stall: from December 2024 to June 2025 public debt rose only $117B while intragovernmental holdings fell $124B. The measures themselves work mostly through GAS accounts.</span></li>
+        <li>A colleague says "the government can just cancel the debt it owes itself." What is the counterargument? <span class="a">Cancelling the securities does not cancel the benefits they back. The trust fund would run dry sooner, and the general fund would still have to pay the benefits from borrowing or taxes. The IOU is bookkeeping; the obligation is not.</span></li>
+      </ol>
+    </details>
+  </div>
+
+  <div class="lesson" id="lesson-3" hidden>
+    <div class="prose">
+      <div class="sec">
+      <h3>1. The financing identity</h3>
+      <p>The three numbers on this page are linked by an identity worth memorizing:</p>
+      <p class="eq">Δ debt held by the public ≈ unified deficit + other means of financing<br>Δ intragovernmental ≈ trust-fund net investment (surplus + interest credited − redemptions)<br>Δ total debt = Δ public + Δ intragovernmental</p>
+      <p>"Other means of financing" is mostly the change in Treasury's cash balance at the Fed (the TGA) plus direct-loan activity such as student loans. Over the last twelve months the public column grew <span class="n" data-f="pub12"></span> and the intragovernmental column <span class="n" data-f="gov12"></span>. Compare the first to the unified deficit from the Monthly Treasury Statement: the gap is the TGA and loan programs. Compare the second to the Trustees' projected trust-fund balances: the gap is the difference between projection and reality.</p>
+      </div>
+
+      <div class="sec">
+      <h3>2. Why the composition is shifting, and what it means for supply</h3>
+      <p>The intragovernmental share of total debt is <span class="n" data-f="govShare"></span>, down from <span class="n" data-f="govPeak"></span>, the high point in this series (which starts in March 2001). Social Security's total cost has exceeded its total income every year since 2021 (Trustees), and OASI's net flow this month was <span class="n" data-f="oasiNet"></span>. From the market's point of view this means a given on-budget deficit now needs more marketable issuance than when the trust funds ran surpluses. The 2026 Trustees Report (June 2026) projects OASI depletion in the fourth quarter of 2032; until then its drawdown is financed by borrowing from the public, and after it current law limits benefits to incoming revenue. Medicare's Hospital Insurance fund can pay full benefits through 2033 under the same report.</p>
+      </div>
+
+      <div class="sec">
+      <h3>3. Gross interest vs. net interest</h3>
+      <p>Interest on intragovernmental debt inflates <b>gross</b> interest expense but is excluded from <b>net</b> interest, the figure CBO uses because it is what leaves the government. When you see a claim that interest costs exceed defense or Medicare, check which one is meant. The intragovernmental piece is real to the trust funds (it extends their solvency dates) but is not a cash cost to the Treasury until the securities are redeemed.</p>
+      </div>
+
+      <div class="sec">
+      <h3>4. Which debt-to-GDP ratio</h3>
+      <p>Debt held by the public to GDP is the economically meaningful ratio and the one in CBO's long-term outlook. Gross debt is higher by the intragovernmental holdings, <span class="n" data-f="gov"></span> in the latest statement. Neither is wrong, but they answer different questions: how much has the market lent the government, versus how large are the government's total promises, including to itself.</p>
+      </div>
+
+      <div class="sec">
+      <h3>5. The special-issue rate as a policy lever</h3>
+      <p>Social Security's new-issue rate is set each month from yields on marketable Treasuries not due for at least four years, measured on the prior month's last business day (SSA). The fund's average yield is a mix of rates locked in over many years, so it lags the rate cycle; SSA publishes both the new-issue and the effective rate. None of this affects the market directly, but it feeds the solvency projections.</p>
+      </div>
+
+      <div class="sec">
+      <h3>6. Retirement funds are a different kind of entry</h3>
+      <p>The Military Retirement Fund and the Civil Service fund together hold <span class="n" data-f="retTot"></span>, more than Medicare. Unlike Social Security, which is funded by payroll taxes from outside the government, much of their money comes from other federal accounts. Their balances are largely accrual entries, meant to make each year's budget show the cost of pension promises as they are earned rather than when paid. They are useful for cost transparency; they are not a store of resources.</p>
+      </div>
+
+      <div class="sec">
+      <h3>7. A monthly reading routine</h3>
+      <ul>
+        <li><b>OASI net flow</b> in the holders table. Negative is the structural story; a positive month often reflects June or December interest crediting (Level 2).</li>
+        <li><b>Intragovernmental share</b> in the stat strip. Drifting down is expected; a sharp drop that is not a standoff means a fund is drawing down fast.</li>
+        <li><b>Public change vs. the unified deficit</b> for the same month (Monthly Treasury Statement, published the 8th business day). A big gap is the TGA being rebuilt or drawn.</li>
+        <li><b>Bills share</b> of marketable debt. A November 2020 Treasury Borrowing Advisory Committee presentation recommended managing bills to 15 to 20% of marketable debt and put the historical average at 23%. A share above that range means Treasury is leaning on the front end, which rolls over faster.</li>
+        <li><b>Debt-limit room.</b> Divide it by the trailing monthly change in total debt for a rough count of months to the next standoff.</li>
+        <li><b>June 30.</b> Social Security's short-term certificates mature on June 30, and any not redeemed are reinvested in longer special-issue bonds (CRS, RS20607), so June's gross issued and redeemed figures are outsized. Read the net.</li>
+      </ul>
+      </div>
+
+      <div class="sec">
+      <h3>8. Where to go deeper</h3>
+      <ul>
+        <li>Social Security Administration, <em>Trust Fund FAQs</em> and <em>Trust Fund Data</em>: the special-issue rate history and monthly investment holdings by fund.</li>
+        <li>Treasury Bureau of the Fiscal Service, <em>Federal Investments Program</em>: the rules for how each account invests.</li>
+        <li>CBO, <em>The Budget and Economic Outlook</em> (long-term chapter) and <em>Federal Debt: A Primer</em>: the cleanest explanation of gross vs. public debt.</li>
+        <li>Treasury's <em>Monthly Treasury Statement</em>, Table 6 (means of financing): reconciles the deficit to the change in debt.</li>
+        <li>Fiscal Data datasets: <em>Debt to the Penny</em> (daily), <em>Monthly Statement of the Public Debt</em> (this page), <em>Trust Fund Reports</em>.</li>
+      </ul>
+      </div>
+    </div>
+    <details class="quiz"><summary>Check your understanding</summary>
+      <ol>
+        <li>The unified deficit was $150B in a month but debt held by the public rose $300B. Where did the other $150B go? <span class="a">Most likely into Treasury's cash balance at the Fed, or into direct loans. It is "other means of financing," not spending.</span></li>
+        <li>Trust-fund interest of $70B is credited in June. Does the unified deficit change? <span class="a">No. It is an intragovernmental transfer: an outlay in one account and a receipt in another. Total debt rises, public debt does not.</span></li>
+        <li>Why does a falling intragovernmental share matter to a bond investor even though no securities change hands? <span class="a">Because a given on-budget deficit now needs more marketable issuance: trust-fund shortfalls add to borrowing from the public instead of offsetting it.</span></li>
+        <li>Two countries both report 120% gross debt to GDP. One has 40 points of it intragovernmental, the other 5. Which has borrowed more from markets? <span class="a">The second. Debt held by the public is 115% vs. 80%.</span></li>
+      </ol>
+    </details>
+  </div>
+</section>
+
+<footer>
+  <p><strong>Reading it.</strong> Total public debt outstanding = debt held by the public + intragovernmental holdings. The public share is what has to be financed in the market; the intragovernmental share is an IOU from one part of the government to another and rolls into the public share as trust funds redeem it. The Federal Reserve's holdings count as debt held by the public.</p>
+  <details class="srcs"><summary>Sources (13)</summary>
+    <p>Bureau of the Fiscal Service, Monthly Statement of the Public Debt, Tables I–III, via the Fiscal Data API (mspd_table_1) and the August 31, 2026 statement workbook. Figures are par value in millions of dollars; TIPS include inflation adjustment.</p>
+    <ul>
+      <li><a href="https://www.ssa.gov/oact/ProgData/intrateformula.html" target="_blank" rel="noopener">SSA, Interest Rate Formula for Special Issues</a></li>
+      <li><a href="https://www.ssa.gov/oact/progdata/fundFAQ.html" target="_blank" rel="noopener">SSA, Trust Fund FAQs</a></li>
+      <li><a href="https://www.ssa.gov/oact/progdata/annualinterestrates.html" target="_blank" rel="noopener">SSA, Average and Effective Interest Rates</a></li>
+      <li><a href="https://www.ssa.gov/oact/TRSUM/" target="_blank" rel="noopener">Social Security and Medicare Trustees, 2025 summary</a></li>
+      <li><a href="https://rssa.com/resources/inside-the-2026-social-security-trustees-report/" target="_blank" rel="noopener">RSSA, Inside the 2026 Social Security Trustees Report (June 9, 2026)</a></li>
+      <li><a href="https://www.everycrsreport.com/reports/RS20607.html" target="_blank" rel="noopener">CRS, Social Security: Trust Fund Investment Practices (RS20607, 2014)</a></li>
+      <li><a href="https://home.treasury.gov/system/files/136/DescriptionofExtraordinaryMeasures20250117.pdf" target="_blank" rel="noopener">Treasury, Description of Extraordinary Measures (January 17, 2025)</a></li>
+      <li><a href="https://home.treasury.gov/system/files/221/TBACCharge1Q42020.pdf" target="_blank" rel="noopener">TBAC, Charge 1, Q4 2020 refunding (bill share)</a></li>
+      <li><a href="https://www.federalreserve.gov/releases/z1/current/html/F3_2_s.htm" target="_blank" rel="noopener">Federal Reserve, Financial Accounts (Z.1), table F3.2.s Treasury securities (Sep 11, 2026)</a></li>
+      <li><a href="https://ticdata.treasury.gov/resource-center/data-chart-center/tic/Documents/slt_table5.html" target="_blank" rel="noopener">Treasury TIC, Table 5: Major Foreign Holders of Treasury Securities</a></li>
+      <li><a href="https://ticdata.treasury.gov/resource-center/data-chart-center/tic/Documents/mfhhis01.html" target="_blank" rel="noopener">Treasury TIC, Major Foreign Holders history tables</a></li>
+      <li><a href="https://www.cfr.org/articles/how-many-treasuries-does-china-still-own" target="_blank" rel="noopener">Brad Setser, CFR, How Many Treasuries Does China Still Own? (2016)</a></li>
+    </ul>
+  </details>
+  <p id="logNote"><strong>Data check log.</strong> Explanations audited Oct 18, 2026; 25 sentences corrected (monthly-change intro, holders note, field guide Levels 1–3 and quizzes). Next audit Nov 18, 2026.</p>
+  <p id="foot-note"></p>
+</footer>
+</div>
+
+<script>
+const DATA = {"asof":"2026-09-30","prior":"2026-08-31","totals":[["2001-03",3435028.9,2338710.9,5773739.8],["2001-04",3297979.9,2363367.5,5661348.4],["2001-05",3276924.1,2379258.2,5656182.3],["2001-06",3274773.5,2452042.4,5726814.9],["2001-07",3266221.7,2452081.0,5718302.7],["2001-08",3340818.5,2429058.4,5769875.8],["2001-09",3339310.1,2468152.8,5807462.9],["2001-10",3333038.8,2482944.0,5815982.8],["2001-11",3404027.1,2484870.1,5888897.2],["2001-12",3394398.7,2549039.6,5943439.3],["2002-01",3378923.8,2558303.6,5937229.3],["2002-02",3442244.0,2561208.9,6003452.9],["2002-03",3444137.2,2561895.4,6006031.5],["2002-04",3402337.5,2582340.4,5984676.9],["2002-05",3433835.9,2585496.5,6019332.4],["2002-06",3464147.3,2662320.6,6126468.9],["2002-07",3500452.3,2659289.4,6159740.7],["2002-08",3558276.9,2652205.3,6210482.2],["2002-09",3553180.2,2675055.6,6228235.7],["2002-10",3586524.4,2696004.4,6282527.8],["2002-11",3649353.0,2694108.4,6343460.4],["2002-12",3647940.2,2757768.4,6405706.6],["2003-01",3636977.8,2764398.6,6401377.4],["2003-02",3683888.1,2761902.3,6445790.4],["2003-03",3711311.7,2749464.2,6460776.0],["2003-04",3702844.6,2757535.7,6460381.3],["2003-05",3776622.4,2781525.1,6558147.5],["2003-06",3816830.6,2853290.1,6670120.7],["2003-07",3902894.1,2848300.9,6751194.9],["2003-08",3947859.9,2842180.5,6790041.4],["2003-09",3924090.1,2859140.9,6783231.0],["2003-10",3990507.7,2882167.7,6872676.4],["2003-11",4032905.4,2892160.7,6925065.1],["2003-12",4044243.6,2953719.5,6997964.2],["2004-01",4045201.0,2964033.8,7009234.7],["2004-02",4125593.3,2966349.5,7091942.8],["2004-03",4176874.5,2954193.7,7131068.2],["2004-04",4158978.0,2974811.3,7133789.4],["2004-05",4207088.2,2989295.0,7196383.2],["2004-06",4218910.5,3055425.3,7274335.3],["2004-07",4267913.1,3048654.3,7316568.4],["2004-08",4298491.6,3052458.1,7350949.8],["2004-09",4307345.3,3071708.3,7379052.7],["2004-10",4318485.0,3111191.5,7429677.0],["2004-11",4407906.6,3117302.8,7525210.2],["2004-12",4408389.1,3187753.4,7596143.6],["2005-01",4428221.4,3199522.5,7627743.1],["2005-02",4508287.8,3204849.9,7713138.3],["2005-03",4572715.5,3204223.4,7776938.9],["2005-04",4551064.6,3213472.3,7764537.0],["2005-05",4542377.7,3235501.7,7777880.3],["2005-06",4527696.7,3308799.1,7836496.3],["2005-07",4580784.4,3306833.7,7887618.1],["2005-08",4614278.8,3312654.3,7926932.5],["2005-09",4601239.3,3331471.3,7932709.7],["2005-10",4650515.8,3376607.1,8027122.9],["2005-11",4709403.0,3382919.4,8092321.5],["2005-12",4714820.6,3455592.4,8170414.3],["2006-01",4724636.9,3471432.8,8196069.8],["2006-02",4771117.3,3498768.9,8269886.3],["2006-03",4872484.6,3498672.0,8371155.7],["2006-04",4819948.6,3535769.2,8355717.9],["2006-05",4807517.3,3549259.7,8356777.0],["2006-06",4797204.3,3622838.2,8420041.5],["2006-07",4819732.1,3624614.5,8444346.8],["2006-08",4884685.2,3630348.5,8515033.8],["2006-09",4843120.6,3663853.3,8506974.2],["2006-10",4880611.3,3703718.2,8584329.5],["2006-11",4929567.0,3703678.5,8633246.5],["2006-12",4901047.4,3779178.5,8680223.9],["2007-01",4913960.9,3793600.3,8707561.2],["2007-02",4979111.3,3798999.6,8778110.9],["2007-03",5053939.9,3795725.3,8849665.2],["2007-04",5007058.2,3833109.6,8840167.8],["2007-05",4980871.2,3848121.3,8828991.5],["2007-06",4943090.4,3924584.7,8867675.2],["2007-07",5003717.3,3928721.8,8932438.2],["2007-08",5096937.7,3908709.9,9005648.6],["2007-09",5049305.7,3958347.7,9007653.4],["2007-10",5067079.1,4012008.1,9079086.3],["2007-11",5146579.0,4002761.8,9149340.9],["2007-12",5136303.3,4092870.4,9229172.8],["2008-01",5132264.6,4105742.7,9238007.7],["2008-02",5259803.9,4098246.5,9358050.9],["2008-03",5334116.1,4103479.4,9437593.7],["2008-04",5244195.2,4133362.5,9377556.8],["2008-05",5278699.2,4110099.6,9388798.9],["2008-06",5285064.4,4206942.1,9492005.7],["2008-07",5403381.6,4182098.5,9585480.4],["2008-08",5479099.8,4166655.1,9645755.4],["2008-09",5808692.2,4216033.0,10024725.3],["2008-10",6302793.6,4271301.4,10574094.4],["2008-11",6396591.0,4264584.1,10661175.3],["2008-12",6369318.5,4330486.3,10699804.9],["2009-01",6317298.5,4314781.4,10632079.9],["2009-02",6579162.8,4297982.4,10877145.2],["2009-03",6833543.4,4293397.7,11126941.2],["2009-04",6930824.9,4307766.9,11238591.8],["2009-05",7019321.6,4302278.4,11321600.0],["2009-06",7174911.9,4370362.9,11545274.8],["2009-07",7335598.2,4333677.6,11669276.8],["2009-08",7484145.5,4328725.5,11812869.9],["2009-09",7551862.3,4357967.2,11909828.6],["2009-10",7487887.0,4405203.6,11893090.6],["2009-11",7712387.0,4400659.8,12113047.8],["2009-12",7811009.0,4500340.8,12311349.7],["2010-01",7759489.7,4519146.0,12278635.8],["2010-02",7936671.0,4503396.5,12440067.6],["2010-03",8290068.8,4483054.3,12773123.1],["2010-04",8434434.6,4514304.2,12948738.9],["2010-05",8494419.4,4498119.6,12992539.1],["2010-06",8633680.4,4568111.1,13201791.5],["2010-07",8702457.7,4535269.2,13237727.0],["2010-08",8927061.4,4522591.3,13449652.7],["2010-09",9022807.7,4538814.9,13561622.6],["2010-10",9069879.0,4598946.5,13668824.5],["2010-11",9275024.7,4585749.1,13860773.8],["2010-12",9390476.1,4634739.1,14025215.2],["2011-01",9485417.0,4645633.7,14131051.3],["2011-02",9565541.4,4629222.7,14194764.2],["2011-03",9651643.3,4618470.6,14270114.9],["2011-04",9654950.3,4632679.8,14287630.1],["2011-05",9723455.5,4621212.2,14344667.7],["2011-06",9742223.5,4600863.6,14343088.1],["2011-07",9755796.4,4586574.0,14342369.4],["2011-08",10024253.1,4660039.6,14684292.7],["2011-09",10127031.2,4663309.3,14790340.4],["2011-10",10256015.4,4737693.6,14993709.0],["2011-11",10389957.8,4720540.8,15110498.5],["2011-12",10447663.0,4775277.2,15222940.2],["2012-01",10572374.4,4783766.1,15356140.5],["2012-02",10722996.3,4765895.0,15488891.3],["2012-03",10846824.6,4735254.1,15582078.8],["2012-04",10916070.9,4776297.2,15692367.9],["2012-05",11006251.4,4764434.3,15770685.5],["2012-06",11044184.8,4810852.0,15855037.0],["2012-07",11122282.5,4810952.6,15933235.0],["2012-08",11272625.5,4743144.3,16015769.8],["2012-09",11269585.7,4796656.2,16066240.9],["2012-10",11411597.9,4849871.9,16261470.7],["2012-11",11553201.4,4816347.7,16369549.1],["2012-12",11581518.5,4851212.6,16432730.0],["2013-01",11560176.4,4873616.5,16433791.8],["2013-02",11822436.1,4864852.5,16687288.6],["2013-03",11916887.8,4854491.2,16771379.0],["2013-04",11943148.3,4885697.3,16828844.6],["2013-05",11897150.7,4841670.5,16738822.2],["2013-06",11901292.1,4837027.9,16738320.1],["2013-07",11917023.2,4821576.0,16738599.2],["2013-08",11967013.9,4771635.8,16738649.7],["2013-09",11976279.2,4761904.3,16738183.5],["2013-10",12187369.7,4968747.2,17156116.9],["2013-11",12281126.2,4936025.2,17217152.0],["2013-12",12355426.9,4996544.2,17351971.0],["2014-01",12308143.2,4984876.5,17293019.6],["2014-02",12492549.9,4970678.7,17463228.5],["2014-03",12619318.9,4981908.4,17601227.2],["2014-04",12503468.3,5004968.8,17508437.1],["2014-05",12538030.4,4978928.1,17516958.5],["2014-06",12572219.6,5060386.7,17632605.8],["2014-07",12651478.1,5035658.7,17687137.3],["2014-08",12732611.8,5016561.4,17749172.4],["2014-09",12784971.0,5039099.8,17824070.6],["2014-10",12857056.1,5080104.4,17937160.5],["2014-11",12922681.5,5082868.4,18005549.4],["2014-12",13023951.2,5117492.7,18141443.9],["2015-01",12984930.0,5097364.3,18082294.1],["2015-02",13074035.6,5081818.5,18155854.1],["2015-03",13090399.1,5061657.4,18152055.9],["2015-04",13053681.0,5098878.5,18152560.0],["2015-05",13052706.4,5100145.2,18152851.8],["2015-06",13076413.9,5075583.4,18151998.2],["2015-07",13135044.9,5016277.6,18151322.5],["2015-08",13119752.7,5031396.8,18151149.5],["2015-09",13123847.2,5026770.5,18150618.3],["2015-10",13060656.9,5092324.8,18152981.7],["2015-11",13588989.4,5238334.4,18827323.0],["2015-12",13672522.3,5249656.7,18922179.0],["2016-01",13657155.2,5355672.5,19012827.8],["2016-02",13785189.2,5340266.0,19125455.2],["2016-03",13924877.7,5340061.0,19264938.6],["2016-04",13841194.8,5346192.8,19187386.5],["2016-05",13886302.6,5379148.9,19265451.6],["2016-06",13932742.7,5448848.4,19381591.1],["2016-07",13998219.6,5429474.7,19427695.4],["2016-08",14104114.0,5406182.8,19510295.8],["2016-09",14173424.2,5400021.5,19573444.6],["2016-10",14286500.5,5519214.7,19805715.2],["2016-11",14443700.1,5504364.5,19948064.7],["2016-12",14434842.3,5541985.4,19976826.7],["2017-01",14376138.8,5561122.5,19937261.3],["2017-02",14411381.0,5548212.7,19959593.7],["2017-03",14369681.9,5476738.1,19846420.1],["2017-04",14293344.7,5552784.5,19846129.2],["2017-05",14298976.5,5546965.4,19845941.9],["2017-06",14366186.3,5478367.8,19844554.2],["2017-07",14360944.5,5483964.6,19844909.0],["2017-08",14381562.0,5462971.4,19844533.5],["2017-09",14673428.6,5571471.4,20244899.9],["2017-10",14751446.1,5691027.5,20442473.5],["2017-11",14918735.6,5671656.1,20590391.8],["2017-12",14814721.0,5678025.4,20492747.4],["2018-01",14803169.6,5690560.2,20493729.8],["2018-02",15150589.1,5705082.3,20855672.4],["2018-03",15428009.9,5661632.9,21089642.8],["2018-04",15335128.4,5733072.1,21068200.5],["2018-05",15426913.4,5718301.8,21145215.2],["2018-06",15466564.2,5728504.5,21195069.7],["2018-07",15569493.1,5743567.9,21313061.1],["2018-08",15785389.2,5673460.5,21458849.7],["2018-09",15761154.5,5754904.2,21516057.6],["2018-10",15843329.3,5859040.5,21702369.8],["2018-11",16044318.2,5805775.7,21850093.9],["2018-12",16101666.5,5872429.2,21974095.7],["2019-01",16101226.8,5881196.2,21982423.0],["2019-02",16250898.0,5864628.4,22115526.4],["2019-03",16204392.0,5823487.6,22027879.6],["2019-04",16192789.4,5834879.4,22027667.8],["2019-05",16202283.3,5824141.1,22026424.4],["2019-06",16188422.1,5834860.6,22023282.6],["2019-07",16211185.0,5811184.3,22022369.3],["2019-08",16596815.6,5863651.0,22460466.7],["2019-09",16809092.3,5910309.0,22719402.3],["2019-10",16981310.6,6027098.6,23008410.3],["2019-11",17105420.8,5970777.6,23076199.4],["2019-12",17170441.5,6030937.6,23201380.2],["2020-01",17212634.8,6011178.1,23223812.9],["2020-02",17413050.2,5996908.9,23409959.1],["2020-03",17674770.8,6012100.2,23686871.0],["2020-04",19053618.9,5920553.0,24974171.9],["2020-05",19812782.0,5933479.4,25746260.4],["2020-06",20530277.7,5946962.9,26477240.6],["2020-07",20634400.3,5890553.6,26524952.9],["2020-08",20822038.4,5906797.5,26728835.8],["2020-09",21018952.1,5926439.1,26945391.2],["2020-10",21096974.6,6038502.2,27135476.7],["2020-11",21349471.6,6096816.7,27446288.2],["2020-12",21632418.9,6115378.6,27747797.5],["2021-01",21643914.8,6140637.8,27784552.5],["2021-02",21755736.8,6146627.2,27902364.1],["2021-03",21986939.5,6145631.6,28132570.0],["2021-04",22056055.1,6118659.2,28174714.3],["2021-05",22020939.2,6178069.5,28199007.7],["2021-06",22329822.8,6199613.3,28529436.1],["2021-07",22284627.6,6143094.0,28427721.6],["2021-08",22254544.4,6172774.3,28427316.8],["2021-09",22282900.2,6146017.9,28428919.1],["2021-10",22637089.6,6271676.2,28908764.9],["2021-11",22645911.9,6262074.6,28907987.5],["2021-12",23143747.3,6473468.2,29617214.5],["2022-01",23487180.9,6525204.9,30012385.7],["2022-02",23776559.9,6513793.5,30290353.3],["2022-03",23879767.7,6521191.9,30400959.6],["2022-04",23847245.1,6526909.1,30374155.2],["2022-05",23904391.4,6595226.8,30499619.2],["2022-06",23912159.7,6656422.0,30568581.7],["2022-07",23952579.3,6642529.4,30595108.6],["2022-08",24267551.2,6668524.0,30936075.2],["2022-09",24299192.6,6629719.0,30928911.6],["2022-10",24352541.7,6885759.5,31238301.2],["2022-11",24553456.6,6859865.9,31413322.4],["2022-12",24517593.3,6902096.2,31419689.4],["2023-01",24583994.5,6870988.7,31454982.0],["2023-02",24609240.8,6850050.7,31459291.5],["2023-03",24693515.0,6764922.6,31458437.6],["2023-04",24605068.0,6852747.0,31457815.0],["2023-05",24630686.2,6833771.2,31464457.4],["2023-06",25461998.2,6870276.0,32332274.2],["2023-07",25708799.3,6899785.8,32608585.1],["2023-08",26044050.6,6870098.7,32914149.3],["2023-09",26330141.9,6837192.0,33167333.8],["2023-10",26576222.0,7123357.5,33699579.6],["2023-11",26843822.1,7034856.7,33878678.8],["2023-12",26938517.5,7062976.0,34001493.6],["2024-01",27071861.9,7119288.5,34191150.4],["2024-02",27380290.0,7090792.6,34471082.6],["2024-03",27511455.2,7075077.5,34586532.8],["2024-04",27480960.2,7136034.2,34616994.4],["2024-05",27606806.6,7060308.9,34667115.4],["2024-06",27612897.1,7218737.8,34831634.0],["2024-07",27930512.5,7174259.1,35104770.6],["2024-08",28168005.1,7088052.4,35256056.6],["2024-09",28307312.3,7157361.7,35464673.9],["2024-10",28572149.0,7379452.1,35951601.2],["2024-11",28791208.1,7296155.2,36087363.4],["2024-12",28836996.1,7381609.2,36218605.3],["2025-01",28911508.6,7308698.1,36220206.7],["2025-02",28914410.5,7304512.8,36218923.3],["2025-03",28909508.8,7304801.6,36214310.4],["2025-04",28852660.9,7360896.2,36213557.2],["2025-05",28952461.1,7263357.2,36215818.4],["2025-06",28953497.5,7257972.8,36211469.3],["2025-07",29531340.7,7385647.2,36916986.8],["2025-08",29968531.3,7305734.7,37274265.9],["2025-09",30277766.4,7359787.1,37637552.5],["2025-10",30570708.4,7469385.4,38040093.8],["2025-11",30774117.2,7622093.9,38396211.0],["2025-12",30846717.5,7667293.3,38514008.8],["2026-01",30919122.6,7602244.9,38521367.5],["2026-02",31186965.0,7582841.1,38769806.1],["2026-03",31431182.2,7634239.0,39065421.2],["2026-04",31272489.8,7695343.9,38967833.7],["2026-05",31515369.9,7692390.2,39207760.2],["2026-06",31681308.3,7781090.1,39462398.4],["2026-07",32045863.6,7725752.5,39771617.1],["2026-08",32414988.8,7760652.3,40175641.1],["2026-09",32425012.5,7746812.6,40171825.1]],"mktcols":["Bills","Notes","Bonds","TIPS","FRN","FFB"],"mkt":[["2024-01",[[5779020.8,1223.0],[13826190.1,4992.6],[4394498.4,7049.6],[1965830.6,474.5],[525534.6,31.1],[0.0,5492.2]]],["2024-02",[[6010137.1,1099.3],[13825170.9,4621.2],[4438166.5,6910.5],[1973185.2,501.7],[553526.7,38.9],[0.0,5492.2]]],["2024-03",[[6061735.9,1129.5],[13858606.6,4588.4],[4460168.6,6887.7],[1998753.2,580.2],[553515.4,50.2],[0.0,5492.2]]],["2024-04",[[5865412.3,1350.1],[13989123.7,5729.8],[4508908.9,6359.3],[1995109.9,529.0],[540302.7,46.7],[0.0,5492.2]]],["2024-05",[[5865792.9,987.5],[14008399.7,5372.5],[4553640.8,6717.1],[2025207.6,544.0],[569977.0,34.9],[0.0,5492.2]]],["2024-06",[[5764901.5,928.6],[14041377.2,5330.2],[4574270.4,6794.5],[2053276.6,589.7],[597978.2,33.2],[0.0,4514.1]]],["2024-07",[[5914851.6,930.6],[14221622.5,5362.7],[4625031.7,6771.9],[2023107.0,605.7],[559543.7,35.7],[0.0,4514.1]]],["2024-08",[[6120980.7,821.2],[14186936.1,5269.4],[4650816.3,6741.9],[2031564.2,633.4],[587537.1,41.3],[0.0,4514.1]]],["2024-09",[[6004140.5,620.1],[14338035.0,5398.8],[4701363.5,6944.3],[2051110.2,632.7],[615530.1,48.0],[0.0,4514.1]]],["2024-10",[[6185973.2,804.6],[14438251.7,5380.9],[4736834.7,6993.5],[2033272.0,636.3],[578040.0,69.9],[0.0,4514.1]]],["2024-11",[[6388881.1,882.2],[14404203.6,5297.4],[4751418.3,7877.9],[2053248.1,626.4],[606036.3,73.4],[0.0,4514.1]]],["2024-12",[[6186185.0,697.1],[14559748.9,5682.2],[4803942.5,7725.2],[2077442.1,623.6],[634040.5,67.5],[0.0,4514.1]]],["2025-01",[[6378989.3,935.7],[14685344.9,5685.4],[4842155.5,8052.7],[1994682.4,707.2],[597736.1,49.7],[0.0,4514.1]]],["2025-02",[[6367075.4,876.3],[14730527.6,5486.0],[4877983.5,8192.4],[2004602.0,686.5],[628556.0,51.4],[0.0,4514.1]]],["2025-03",[[6155073.5,877.0],[14808507.5,5379.0],[4911265.9,8646.9],[2035487.8,692.9],[656546.8,59.1],[0.0,4514.1]]],["2025-04",[[6059334.9,683.7],[14902681.1,5072.1],[4948640.3,8824.2],[2026965.6,682.2],[618319.6,40.2],[0.0,4514.1]]],["2025-05",[[6002406.3,617.9],[14893011.7,4635.0],[4978521.0,8748.0],[2049008.5,659.1],[646329.7,20.0],[0.0,4514.1]]],["2025-06",[[5783517.8,543.3],[15068800.7,4796.0],[5030995.2,9151.3],[2080375.2,666.3],[674332.4,17.1],[0.0,4092.7]]],["2025-07",[[5995422.6,487.7],[15201928.3,5062.1],[5067450.5,9182.1],[2051163.2,661.9],[634495.6,18.0],[0.0,4092.7]]],["2025-08",[[6368505.4,501.2],[15206686.5,4615.5],[5085902.9,9025.0],[2064363.8,638.5],[662495.5,18.0],[0.0,4092.7]]],["2025-09",[[6396631.6,413.5],[15387391.3,5087.6],[5133118.2,9442.4],[2087361.5,662.9],[690499.8,11.9],[0.0,4092.7]]],["2025-10",[[6592806.4,387.8],[15500647.5,5034.1],[5162834.7,9864.5],[2077994.6,667.7],[644103.7,130.2],[0.0,4092.7]]],["2025-11",[[6722892.1,401.3],[15493447.0,4405.5],[5188594.0,10203.6],[2101041.7,677.0],[672150.1,83.7],[0.0,4092.7]]],["2025-12",[[6546563.7,696.4],[15632487.7,4385.9],[5238539.9,10461.6],[2133176.5,705.2],[700175.9,57.6],[0.0,4092.7]]],["2026-01",[[6594909.2,750.5],[15715253.1,3858.7],[5260738.9,10666.1],[2054344.9,676.7],[700094.1,139.5],[0.0,4092.7]]],["2026-02",[[6807147.4,958.4],[15763631.5,3523.6],[5288427.3,10136.8],[2061467.6,687.9],[676212.5,133.7],[0.0,4092.7]]],["2026-03",[[6819223.9,339.2],[15875374.1,4019.8],[5337255.8,11368.0],[2089591.3,684.3],[704216.6,124.4],[0.0,4092.7]]],["2026-04",[[6621264.9,721.5],[15933810.7,4107.0],[5371740.5,11420.3],[2079045.2,680.5],[650246.5,74.5],[0.0,4092.7]]],["2026-05",[[6758273.7,504.9],[15939431.2,3290.3],[5401056.9,11039.7],[2117549.0,479.2],[678237.4,79.1],[0.0,4092.7]]],["2026-06",[[6690117.0,571.6],[16057004.3,3851.6],[5447713.8,11740.8],[2164190.3,748.7],[706265.4,36.7],[0.0,3591.0]]],["2026-07",[[6988226.4,664.5],[16167590.4,4121.8],[5476901.7,11815.5],[2149434.8,756.1],[651931.5,44.5],[0.0,3591.0]]],["2026-08",[[7247855.6,214.4],[16214682.0,3738.9],[5512728.5,12555.6],[2151957.0,702.9],[679918.0,57.6],[0.0,3591.0]]],["2026-09",[[7117937.1,208.2],[16277939.4,3567.9],[5538540.2,12477.7],[2172033.5,608.1],[707946.7,28.8],[0.0,3591.0]]]],"table1":{"marketable":{"Bills":[7117937.1,208.2,7118145.3],"Notes":[16277939.4,3567.9,16281507.3],"Bonds":[5538540.2,12477.7,5551017.8],"TIPS":[2172033.5,608.1,2172641.6],"Floating Rate Notes":[707946.7,28.8,707975.5],"Federal Financing Bank":[0.0,3591.0,3591.0]},"total_marketable":[31814396.8,20481.7,31834878.4],"nonmarketable":{"Domestic Series":[10709.7,0.0,10709.7],"State and Local Government Series":[81021.6,0.0,81021.6],"U.S. Savings Securities":[146290.1,0.0,146290.1],"Government Account Series":[367961.7,7726330.9,8094292.6],"Other":[4632.7,0.0,4632.7]},"total_nonmarketable":[610615.8,7726330.9,8336946.7],"total":[32425012.5,7746812.6,40171825.1]},"table2":{"total":[32425012.5,7746812.6,40171825.1],"other_debt_not_subject":[474.1,0.0,474.1],"unamortized_discount":[53765.7,134865.9,188631.6],"ffb":[0.0,3591.0,3591.0],"guaranteed":[0.0,0.0,0.0],"subject_to_limit":[32370772.8,7608355.7,39979128.5],"limit":41103995.7,"balance":1124867.2},"holders":[{"name":"Federal Old-Age And Survivors Insurance Trust Fund","prior":2209448.8,"issued":107644.9,"redeemed":-136670.0,"cur":2180423.7},{"name":"Department Of Defense Military Retirement Fund","prior":2125501.2,"issued":396564.7,"redeemed":-401622.9,"cur":2120443.0},{"name":"Civil Service Retirement And Disability Fund, Office Of Personnel Management","prior":1142593.4,"issued":52783.0,"redeemed":-9540.8,"cur":1185835.6},{"name":"Department Of Defense, Medicare Eligible Retiree Fund","prior":507604.5,"issued":120700.7,"redeemed":-121690.4,"cur":506614.8},{"name":"Federal Hospital Insurance Trust Fund","prior":260495.4,"issued":49722.3,"redeemed":-42742.4,"cur":267475.3},{"name":"Federal Disability Insurance Trust Fund","prior":257585.4,"issued":18233.6,"redeemed":-15182.4,"cur":260636.7},{"name":"FHA, Mutual Mortgage Insurance Capital Reserve Account, Housing and Urban Development","prior":195070.2,"issued":888031.8,"redeemed":-881443.9,"cur":201658.1},{"name":"Federal Supplementary Medical Insurance Trust Fund","prior":186316.6,"issued":67099.2,"redeemed":-76886.7,"cur":176529.1},{"name":"Deposit Insurance Fund","prior":139657.3,"issued":373039.1,"redeemed":-369778.4,"cur":142918.0},{"name":"Unemployment Trust Fund","prior":93891.5,"issued":2281.2,"redeemed":-3126.2,"cur":93046.5},{"name":"Nuclear Waste Disposal Fund, Department Of Energy","prior":89114.2,"issued":2889.0,"redeemed":-2299.2,"cur":89703.9},{"name":"Pension Benefit Guaranty Corporation","prior":77428.3,"issued":134878.3,"redeemed":-134723.9,"cur":77582.7},{"name":"Employees' Life Insurance Fund, Office Of Personnel Management","prior":60422.2,"issued":1284.4,"redeemed":-808.0,"cur":60898.6},{"name":"Highway Trust Fund","prior":49913.5,"issued":988892.5,"redeemed":-994808.6,"cur":43997.4},{"name":"Guarantees Of Mortgage-Backed Securities Capital Reserve Account, Government National Mortgage","prior":31601.3,"issued":658561.1,"redeemed":-658978.5,"cur":31183.9},{"name":"National Credit Union Share Insurance Fund","prior":25454.1,"issued":32133.6,"redeemed":-32194.7,"cur":25392.9},{"name":"Exchange Stabilization Fund, Office Of The Secretary, Treasury","prior":24865.1,"issued":522646.2,"redeemed":-522644.0,"cur":24867.3},{"name":"Employees' Health Benefits Fund, Office Of Personnel Management","prior":23774.3,"issued":10452.7,"redeemed":-10664.7,"cur":23562.3},{"name":"Foreign Service Retirement And Disability Fund","prior":22231.8,"issued":559.5,"redeemed":-114.2,"cur":22677.2},{"name":"Airport And Airway Trust Fund","prior":22737.8,"issued":2536.8,"redeemed":-3067.3,"cur":22207.2},{"name":"Postal Service Retiree Health Benefits Fund","prior":19985.4,"issued":0.0,"redeemed":-419.6,"cur":19565.9},{"name":"Abandoned Mines Reclamation Fund, Office Of Surface Mining Reclamation And Enforcement","prior":13354.2,"issued":248106.8,"redeemed":-248136.6,"cur":13324.3},{"name":"Hazardous Substance Superfund","prior":11991.2,"issued":32278.5,"redeemed":-32427.2,"cur":11842.5},{"name":"Oil Spill Liability Trust Fund","prior":10874.5,"issued":52759.8,"redeemed":-52739.2,"cur":10895.1},{"name":"Postal Service Fund","prior":9118.5,"issued":205939.7,"redeemed":-205302.1,"cur":9756.1},{"name":"Harbor Maintenance Trust Fund","prior":10434.5,"issued":17480.0,"redeemed":-18416.3,"cur":9498.2},{"name":"Farm Credit Insurance Fund, Capital Corporation Investment Fund, Farm Credit Administration","prior":8613.7,"issued":315.3,"redeemed":-250.0,"cur":8678.9},{"name":"Corporate Capital Account, United States International Development Finance Corporation","prior":7291.7,"issued":0.0,"redeemed":-191.0,"cur":7100.7},{"name":"National Parks and Public Lands Legacy Restoration Fund","prior":5927.3,"issued":5683.5,"redeemed":-5666.7,"cur":5944.1},{"name":"District Of Columbia Federal Pension Trust Fund","prior":4307.8,"issued":4034.9,"redeemed":-3354.4,"cur":4988.4},{"name":"Vaccine Injury Compensation Trust Fund","prior":4857.8,"issued":18341.5,"redeemed":-18338.9,"cur":4860.5},{"name":"Servicemen's Group Life Insurance Fund","prior":4833.3,"issued":0.0,"redeemed":0.0,"cur":4833.3},{"name":"Treasury Forfeiture Fund","prior":4206.8,"issued":16592.5,"redeemed":-16731.7,"cur":4067.6},{"name":"Natural Resource Damage Assessment And Restoration Fund, U.S. Fish And Wildlife Service, Interior","prior":3920.0,"issued":2053.8,"redeemed":-2080.1,"cur":3893.7},{"name":"Disgorgement Penalty Amounts Held For Investment","prior":3845.7,"issued":65369.9,"redeemed":-65459.5,"cur":3756.2},{"name":"Federal Aid To Wildlife Restoration, United States Fish And Wildlife Service","prior":2917.0,"issued":8463.0,"redeemed":-8482.0,"cur":2898.0},{"name":"Sport Fish Restoration And Boating Trust Fund","prior":2680.0,"issued":4591.9,"redeemed":-4578.2,"cur":2693.7},{"name":"Gulf Coast Restoration Trust Fund","prior":2716.1,"issued":5696.6,"redeemed":-5764.8,"cur":2647.9},{"name":"Assessment Funds, Office Of The Comptroller Of The Currency","prior":1843.5,"issued":20303.0,"redeemed":-19921.9,"cur":2224.5},{"name":"Leaking Underground Storage Tank Trust Fund","prior":2092.4,"issued":2489.8,"redeemed":-2484.3,"cur":2097.9}],"holders_other":33108.3,"holders_other_prior":58272.8,"gas_public":[{"name":"Thrift Savings Fund, Federal Retirement Thrift Investment Board","prior":359959.2,"cur":361699.9},{"name":"Copyright Owners Royalty Fees, Net Of Operating Costs","prior":1993.0,"cur":2007.0},{"name":"Custodial Tribal Fund, Office Of The Special Trustee For American Indians","prior":1281.8,"cur":1256.3},{"name":"Registry Funds, United States Courts","prior":1170.1,"cur":1197.7},{"name":"Special Investment Account","prior":918.2,"cur":865.0},{"name":"Tribal Trust Fund, Office Of The Special Trustee For American Indians","prior":549.0,"cur":566.6}]};
+</script>
+<script>
+(function(){
+const $ = s => document.querySelector(s);
+const fmtT = v => '$' + (v/1e6).toFixed(2) + 'T';
+const fmtB = (v, sign) => { const s = (sign && v>0 ? '+' : (v<0 ? '−' : '')); const a = Math.abs(v); return s + '$' + (a >= 1e6 ? (a/1e6).toFixed(2)+'T' : a >= 1e3 ? (a/1e3).toFixed(0)+'B' : a.toFixed(0)+'M'); };
+const fmtM = v => Math.round(v).toLocaleString('en-US');
+const fmtMs = v => (v>0?'+':(v<0?'−':'')) + Math.round(Math.abs(v)).toLocaleString('en-US');
+const pct = (v, d=1) => (v>0?'+':'') + v.toFixed(d) + '%';
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const lab = ym => MON[+ym.slice(5,7)-1] + ' ' + ym.slice(0,4);
+const labLong = d => MON[+d.slice(5,7)-1] + ' ' + (+d.slice(8,10)) + ', ' + d.slice(0,4);
+const T = DATA.totals; const n = T.length; const last = T[n-1], prev = T[n-2], yago = T[n-13];
+const idx = {p:1, g:2, t:3};
+const NARROW = window.matchMedia('(max-width: 700px)').matches; const WIDE = NARROW ? 640 : 1100, WMIX = NARROW ? 460 : 560;
+const scrollEnd = box => { if (NARROW) box.scrollLeft = box.scrollWidth; };
+
+$('#asof').textContent = labLong(DATA.asof);
+$('#span').textContent = lab(T[0][0]) + ' – ' + lab(last[0]);
+
+// ---------- tiles ----------
+function spark(vals, color) {
+  const w=200, h=34, mn=Math.min(...vals), mx=Math.max(...vals), r = mx-mn || 1;
+  const pts = vals.map((v,i)=>[(i/(vals.length-1))*w, h-3-((v-mn)/r)*(h-8)]);
+  const d = pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ');
+  const e = pts[pts.length-1];
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><path d="${d} L${w} ${h} L0 ${h} Z" fill="${color}" opacity="0.1"/><path d="${d}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/><circle cx="${e[0]}" cy="${e[1]}" r="3.5" fill="${color}"/></svg>`;
+}
+function tile(label, k, color, hero) {
+  const v = last[k], dm = v - prev[k], dy = v - yago[k];
+  const vals = T.slice(-13).map(r=>r[k]);
+  return `<div class="tile${hero?' hero':''}"><div class="label">${color?`<i class="swatch" style="background:${color}"></i>`:''}${label}</div><div class="value">${fmtT(v)}</div><div class="delta"><span>1 mo <b class="${dm>=0?'':'neg'}">${fmtB(dm,true)}</b></span><span>12 mo <b>${fmtB(dy,true)}</b> (${pct(dy/yago[k]*100)})</span></div>${spark(vals, color||'var(--fg)')}</div>`;
+}
+const t2 = DATA.table2;
+$('#tiles').innerHTML =
+  tile('Total public debt outstanding', 3, null, true) +
+  tile('Debt held by the public', 1, 'var(--pub)') +
+  tile('Intragovernmental holdings', 2, 'var(--gov)') +
+  `<div class="tile"><div class="label">Room under the statutory debt limit</div><div class="value">${fmtB(t2.balance)}</div><div class="delta"><span>Limit <b>${fmtT(t2.limit)}</b></span><span>Subject to limit <b>${fmtT(t2.subject_to_limit[2])}</b></span></div><div class="delta" style="margin-top:auto">${(t2.subject_to_limit[2]/t2.limit*100).toFixed(1)}% of ceiling used</div></div>`;
+
+// ---------- stat strip ----------
+const mk = DATA.mkt[DATA.mkt.length-1][1], mkPrev = DATA.mkt[DATA.mkt.length-13][1];
+const mktTot = mk.reduce((s,r)=>s+r[0]+r[1],0), mktTotPrev = mkPrev.reduce((s,r)=>s+r[0]+r[1],0);
+const billShare = (mk[0][0]+mk[0][1])/mktTot*100, billSharePrev = (mkPrev[0][0]+mkPrev[0][1])/mktTotPrev*100;
+const govShare = last[2]/last[3]*100, govShareY = yago[2]/yago[3]*100;
+const avg12 = (last[1]-yago[1])/12, avg12t = (last[3]-yago[3])/12;
+const stat = (k, v, d) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`;
+$('#stats').innerHTML =
+  stat('Intragovernmental share of total', govShare.toFixed(1)+'%', `${govShareY.toFixed(1)}% a year ago`) +
+  stat('Public debt added per month, trailing 12', fmtB(avg12), `${fmtB(avg12t)} total incl. trust funds`) +
+  stat('Bills share of marketable debt', billShare.toFixed(1)+'%', `${billSharePrev.toFixed(1)}% a year ago`) +
+  stat('Public debt, 12-month growth', pct((last[1]/yago[1]-1)*100), `${pct((prev[1]/T[n-14][1]-1)*100)} as of prior month`) +
+  stat('Doubling time at current pace', (Math.log(2)/Math.log(last[1]/yago[1])).toFixed(1)+' yrs', 'public debt, at trailing 12-month growth');
+
+// ---------- generic chart helpers ----------
+function niceTicks(mn, mx, count=5) {
+  const span = mx-mn || 1, raw = span/count, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const steps=[1,2,2.5,5,10]; let step = steps.map(s=>s*mag).find(s=>span/s<=count) || 10*mag;
+  const out=[]; for (let v=Math.ceil(mn/step)*step; v<=mx+1e-9; v+=step) out.push(+v.toFixed(10)); return {ticks:out, step};
+}
+const fmtAxis = (v, mode) => mode==='pct' ? v.toFixed(0)+'%' : (Math.abs(v)>=1e6 ? (v/1e6).toFixed(v%1e6?1:0)+'T' : Math.abs(v)>=1e3 ? (v/1e3).toFixed(0)+'B' : v.toFixed(0));
+
+function attachTip(box, svg, getIndex, render) {
+  const tip = document.createElement('div'); tip.className='tip'; box.appendChild(tip);
+  const cross = svg.querySelector('.cross');
+  function move(ev){
+    const rect = svg.getBoundingClientRect(); const x = (ev.clientX-rect.left)/rect.width*svg.viewBox.baseVal.width;
+    const i = getIndex(x); if (i==null) return hide();
+    const r = render(i); if (!r) return hide();
+    tip.innerHTML = r.html; tip.style.display='block';
+    if (cross){ cross.setAttribute('x1', r.x); cross.setAttribute('x2', r.x); cross.style.display='block'; }
+    const bw = box.clientWidth, px = (r.x/svg.viewBox.baseVal.width)*rect.width; const tw = tip.offsetWidth;
+    tip.style.left = (px + 14 + tw > bw ? px - tw - 14 : px + 14) + 'px'; tip.style.top = Math.max(0, (ev.clientY-rect.top) - 30) + 'px';
+  }
+  function hide(){ tip.style.display='none'; if (cross) cross.style.display='none'; }
+  svg.addEventListener('mousemove', move); svg.addEventListener('mouseleave', hide);
+  svg.addEventListener('touchstart', e=>move(e.touches[0]), {passive:true}); svg.addEventListener('touchmove', e=>move(e.touches[0]), {passive:true});
+}
+
+// ---------- main chart ----------
+let range = 0, mode = 'level';
+function drawMain(){
+  const box = $('#c-main'); const W=WIDE, H=360, ml=52, mr=NARROW?46:16, mt=28, mb=30;
+  let rows = T.map((r,i)=>({ym:r[0], i, p:r[1], g:r[2], t:r[3]}));
+  if (mode!=='level') rows = rows.slice(12).map(r=>{ const b=T[r.i-12]; return mode==='yoy' ? {ym:r.ym, p:r.p-b[1], g:r.g-b[2], t:r.t-b[3]} : {ym:r.ym, p:(r.p/b[1]-1)*100, g:(r.g/b[2]-1)*100, t:(r.t/b[3]-1)*100}; });
+  if (range) rows = rows.slice(-range);
+  const m = rows.length; const xs = i => ml + i/(m-1)*(W-ml-mr);
+  const stacked = mode==='level';
+  let mn = 0, mx = 0;
+  rows.forEach(r=>{ if (stacked){ mx=Math.max(mx,r.t);} else { mn=Math.min(mn,r.p,r.g,r.t); mx=Math.max(mx,r.p,r.g,r.t);} });
+  const {ticks} = niceTicks(mn, mx, 6); const y0 = ticks[0] < mn ? ticks[0] : Math.min(mn, ticks[0]); const y1 = Math.max(mx, ticks[ticks.length-1]);
+  const ys = v => mt + (1 - (v-y0)/(y1-y0))*(H-mt-mb);
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Debt held by the public and intragovernmental holdings over time">`;
+  s += '<g class="grid">' + ticks.map(t=>`<line x1="${ml}" x2="${W-mr}" y1="${ys(t)}" y2="${ys(t)}"/><text x="${ml-6}" y="${ys(t)+4}" text-anchor="end">${fmtAxis(t,mode)}</text>${NARROW?`<text x="${W-mr+6}" y="${ys(t)+4}">${fmtAxis(t,mode)}</text>`:''}`).join('') + '</g>';
+  // x labels
+  const years = []; rows.forEach((r,i)=>{ if (r.ym.endsWith('-12') || (i===0)) years.push([i, r.ym.slice(0,4)]); });
+  const every = Math.ceil(years.length/12);
+  s += years.filter((y,k)=>k%every===0).map(([i,y])=>`<text x="${xs(i)}" y="${H-8}" text-anchor="middle">${i===0?lab(rows[0].ym):y}</text>`).join('');
+  if (stacked){
+    const area = (top, bot) => 'M' + rows.map((r,i)=>xs(i).toFixed(1)+' '+ys(top(r)).toFixed(1)).join(' L') + ' L' + rows.slice().reverse().map((r,i)=>xs(m-1-i).toFixed(1)+' '+ys(bot(r)).toFixed(1)).join(' L') + ' Z';
+    s += `<path d="${area(r=>r.p, r=>0)}" fill="var(--pub)" opacity="0.28"/>`;
+    s += `<path d="${area(r=>r.t, r=>r.p+2*(y1-y0)/(H-mt-mb))}" fill="var(--gov)" opacity="0.32"/>`;
+    const line = f => 'M' + rows.map((r,i)=>xs(i).toFixed(1)+' '+ys(f(r)).toFixed(1)).join(' L');
+    s += `<path d="${line(r=>r.p)}" fill="none" stroke="var(--pub)" stroke-width="2" stroke-linejoin="round"/>`;
+    s += `<path d="${line(r=>r.t)}" fill="none" stroke="var(--gov)" stroke-width="2" stroke-linejoin="round"/>`;
+    const e = rows[m-1];
+    s += `<circle cx="${xs(m-1)}" cy="${ys(e.p)}" r="4" fill="var(--pub)" stroke="var(--card)" stroke-width="2"/><circle cx="${xs(m-1)}" cy="${ys(e.t)}" r="4" fill="var(--gov)" stroke="var(--card)" stroke-width="2"/>`;
+    s += `<text class="vlab" x="${xs(m-1)-6}" y="${ys(e.t)-8}" text-anchor="end" style="fill:var(--fg);font-weight:600">${fmtT(e.t)} total</text>`;
+    s += `<text class="vlab" x="${xs(m-1)-6}" y="${ys(e.p)-8}" text-anchor="end" style="fill:var(--fg)">${fmtT(e.p)} public</text>`;
+  } else {
+    s += `<line x1="${ml}" x2="${W-mr}" y1="${ys(0)}" y2="${ys(0)}" stroke="var(--line)"/>`;
+    const line = f => 'M' + rows.map((r,i)=>xs(i).toFixed(1)+' '+ys(f(r)).toFixed(1)).join(' L');
+    s += `<path d="${line(r=>r.t)}" fill="none" stroke="var(--fg)" stroke-width="1.5" opacity="0.5" stroke-linejoin="round"/>`;
+    s += `<path d="${line(r=>r.g)}" fill="none" stroke="var(--gov)" stroke-width="2" stroke-linejoin="round"/>`;
+    s += `<path d="${line(r=>r.p)}" fill="none" stroke="var(--pub)" stroke-width="2" stroke-linejoin="round"/>`;
+    const e = rows[m-1]; const f = v => mode==='pct' ? pct(v) : fmtB(v,true);
+    s += `<circle cx="${xs(m-1)}" cy="${ys(e.p)}" r="4" fill="var(--pub)" stroke="var(--card)" stroke-width="2"/><circle cx="${xs(m-1)}" cy="${ys(e.g)}" r="4" fill="var(--gov)" stroke="var(--card)" stroke-width="2"/>`;
+    s += `<text class="vlab" x="${xs(m-1)-6}" y="${ys(e.p)-8}" text-anchor="end" style="fill:var(--fg);font-weight:600">${f(e.p)} public</text>`;
+  }
+  s += `<line class="cross" x1="0" x2="0" y1="${mt}" y2="${H-mb}" stroke="var(--muted)" stroke-dasharray="3 3" style="display:none"/>`;
+  s += `<rect x="${ml}" y="${mt}" width="${W-ml-mr}" height="${H-mt-mb}" fill="transparent"/></svg>`;
+  box.innerHTML = s; scrollEnd(box);
+  const f = v => mode==='level' ? fmtM(v) : mode==='pct' ? pct(v) : fmtMs(v);
+  attachTip(box, box.querySelector('svg'), x => { const i = Math.round((x-ml)/(W-ml-mr)*(m-1)); return (i<0||i>m-1)?null:i; }, i => {
+    const r = rows[i];
+    return {x: xs(i), html: `<div class="t">${lab(r.ym)}${mode==='level'?' · $M':mode==='yoy'?' · 12-mo change, $M':' · 12-mo % change'}</div><div class="r"><span><i class="swatch" style="background:var(--pub)"></i>Public</span><span>${f(r.p)}</span></div><div class="r"><span><i class="swatch" style="background:var(--gov)"></i>Intragov.</span><span>${f(r.g)}</span></div><div class="r"><span><i class="swatch" style="background:var(--fg)"></i>Total</span><span>${f(r.t)}</span></div>${mode==='level'?`<div class="r"><span>Intragov. share</span><span>${(r.g/r.t*100).toFixed(1)}%</span></div>`:''}`};
+  });
+}
+$('#range').addEventListener('click', e=>{ const b=e.target.closest('button'); if(!b) return; range=+b.dataset.r; [...$('#range').children].forEach(x=>x.setAttribute('aria-pressed', x===b)); drawMain(); });
+$('#mode').addEventListener('click', e=>{ const b=e.target.closest('button'); if(!b) return; mode=b.dataset.m; [...$('#mode').children].forEach(x=>x.setAttribute('aria-pressed', x===b)); drawMain(); });
+drawMain();
+
+// ---------- monthly flow ----------
+(function(){
+  const box = $('#c-flow'); const W=WIDE, H=260, ml=52, mr=NARROW?46:16, mt=14, mb=30; const N=36;
+  const rows = T.slice(-N).map((r,i)=>{ const b=T[n-N-1+i]; return {ym:r[0], p:r[1]-b[1], g:r[2]-b[2]}; });
+  let mn=0,mx=0; rows.forEach(r=>{ const pos=Math.max(r.p,0)+Math.max(r.g,0), neg=Math.min(r.p,0)+Math.min(r.g,0); mx=Math.max(mx,pos); mn=Math.min(mn,neg); });
+  const {ticks, step} = niceTicks(mn, mx, 5); if (mx > ticks[ticks.length-1]) ticks.push(+(ticks[ticks.length-1]+step).toFixed(10)); if (mn < ticks[0]) ticks.unshift(+(ticks[0]-step).toFixed(10)); const y0=Math.min(mn,ticks[0]), y1=Math.max(mx,ticks[ticks.length-1]);
+  const ys = v => mt + (1-(v-y0)/(y1-y0))*(H-mt-mb); const slot=(W-ml-mr)/N, bw=Math.min(20, slot*0.7); const xs=i=>ml+slot*(i+0.5);
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly change in debt outstanding">`;
+  s += '<g class="grid">' + ticks.map(t=>`<line x1="${ml}" x2="${W-mr}" y1="${ys(t)}" y2="${ys(t)}"/><text x="${ml-6}" y="${ys(t)+4}" text-anchor="end">${fmtAxis(t)}</text>${NARROW?`<text x="${W-mr+6}" y="${ys(t)+4}">${fmtAxis(t)}</text>`:''}`).join('') + '</g>';
+  s += `<line x1="${ml}" x2="${W-mr}" y1="${ys(0)}" y2="${ys(0)}" stroke="var(--fg)" opacity="0.5"/>`;
+  rows.forEach((r,i)=>{
+    const x = xs(i)-bw/2; let posTop=0, negTop=0;
+    [['p','var(--pub)'],['g','var(--gov)']].forEach(([k,c])=>{
+      const v=r[k]; if (!v) return;
+      if (v>0){ const a=ys(posTop+v), b=ys(posTop); s+=`<rect x="${x}" y="${a}" width="${bw}" height="${Math.max(0,b-a-1)}" fill="${c}" rx="2"/>`; posTop+=v; }
+      else { const a=ys(negTop), b=ys(negTop+v); s+=`<rect x="${x}" y="${a+1}" width="${bw}" height="${Math.max(0,b-a-1)}" fill="${c}" rx="2"/>`; negTop+=v; }
+    });
+    if (r.ym.endsWith('-01') || r.ym.endsWith('-07')) s += `<text x="${xs(i)}" y="${H-8}" text-anchor="middle">${lab(r.ym)}</text>`;
+  });
+  s += `<line class="cross" x1="0" x2="0" y1="${mt}" y2="${H-mb}" stroke="var(--muted)" stroke-dasharray="3 3" style="display:none"/>`;
+  s += `<rect x="${ml}" y="${mt}" width="${W-ml-mr}" height="${H-mt-mb}" fill="transparent"/></svg>`;
+  box.innerHTML = s; scrollEnd(box);
+  attachTip(box, box.querySelector('svg'), x=>{ const i=Math.floor((x-ml)/slot); return (i<0||i>=N)?null:i; }, i=>{ const r=rows[i]; return {x:xs(i), html:`<div class="t">${lab(r.ym)} · change, $M</div><div class="r"><span><i class="swatch" style="background:var(--pub)"></i>Public</span><span>${fmtMs(r.p)}</span></div><div class="r"><span><i class="swatch" style="background:var(--gov)"></i>Intragov.</span><span>${fmtMs(r.g)}</span></div><div class="r"><span>Total</span><span>${fmtMs(r.p+r.g)}</span></div>`}; });
+})();
+
+// ---------- Table I ----------
+(function(){
+  const t1 = DATA.table1; const mkP = DATA.mkt[DATA.mkt.length-2][1]; const cols = DATA.mktcols;
+  const mkKeys = {'Bills':0,'Notes':1,'Bonds':2,'TIPS':3,'Floating Rate Notes':4,'Federal Financing Bank':5};
+  const cell = (v, cls='') => `<td class="num ${cls}">${fmtM(v)}</td>`;
+  const dcell = d => d==null ? '<td class="num" style="color:var(--faint)">—</td>' : `<td class="num ${d>0?'pos':d<0?'neg':''}">${fmtMs(d)}</td>`;
+  const row = (name, r, d, cls='', indent=true) => `<tr class="${cls}"><td class="${indent?'indent':''}">${name}</td>${cell(r[0])}${cell(r[1])}${cell(r[2])}${dcell(d)}</tr>`;
+  let h = `<colgroup><col class="c-txt"><col style="width:96px"><col style="width:78px"><col style="width:96px"><col style="width:80px"></colgroup><thead><tr><th>Security</th><th>Held by public</th><th>Intragov.</th><th>Total</th><th>Δ month</th></tr></thead><tbody>`;
+  h += `<tr class="group"><td colspan="5">Marketable</td></tr>`;
+  let prevMktTot = 0;
+  for (const k in t1.marketable){ const j=mkKeys[k]; const pv = mkP[j][0]+mkP[j][1]; prevMktTot += pv; h += row(k, t1.marketable[k], t1.marketable[k][2]-pv); }
+  h += row('Total marketable', t1.total_marketable, t1.total_marketable[2]-prevMktTot, 'total', false);
+  h += `<tr class="group"><td colspan="5">Nonmarketable</td></tr>`;
+  for (const k in t1.nonmarketable) h += row(k, t1.nonmarketable[k], k==='Government Account Series' ? null : null);
+  const prevNonmkt = prev[3]-prevMktTot;
+  h += row('Total nonmarketable', t1.total_nonmarketable, t1.total_nonmarketable[2]-prevNonmkt, 'total', false);
+  h += row('Total public debt outstanding', t1.total, t1.total[2]-prev[3], 'grand', false);
+  h += `</tbody>`;
+  $('#t1').innerHTML = h;
+  $('#t1-sub').textContent = `Millions of dollars, ${labLong(DATA.asof)}. Change is versus ${labLong(DATA.prior)}; per-line changes are shown where the prior statement carries the same line.`;
+})();
+
+// ---------- marketable mix ----------
+(function(){
+  const box = $('#c-mix'); const W=WMIX, H=230, ml=38, mr=NARROW?36:14, mt=10, mb=26;
+  const cols = ['Bills','Notes','Bonds','TIPS','FRN']; const colors = ['var(--pub)','var(--gov)','var(--s3)','var(--s4)','var(--s5)'];
+  const rows = DATA.mkt.map(([ym, r])=>{ const tot = r.reduce((s,x)=>s+x[0]+x[1],0); return {ym, sh: cols.map((c,j)=>(r[j][0]+r[j][1])/tot*100), amt: cols.map((c,j)=>r[j][0]+r[j][1]), tot}; });
+  const m = rows.length; const xs=i=>ml+i/(m-1)*(W-ml-mr); const ys=v=>mt+(1-v/100)*(H-mt-mb);
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Marketable debt mix by security type">`;
+  s += '<g class="grid">' + [0,25,50,75,100].map(t=>`<line x1="${ml}" x2="${W-mr}" y1="${ys(t)}" y2="${ys(t)}"/><text x="${ml-6}" y="${ys(t)+4}" text-anchor="end">${t}%</text>${NARROW?`<text x="${W-mr+6}" y="${ys(t)+4}">${t}%</text>`:''}`).join('') + '</g>';
+  let base = rows.map(()=>0);
+  cols.forEach((c,j)=>{
+    const top = rows.map((r,i)=>base[i]+r.sh[j]);
+    const d = 'M' + rows.map((r,i)=>xs(i).toFixed(1)+' '+ys(top[i]).toFixed(1)).join(' L') + ' L' + rows.slice().reverse().map((r,i)=>{ const k=m-1-i; return xs(k).toFixed(1)+' '+ys(base[k]+(j?0.35:0)).toFixed(1); }).join(' L') + ' Z';
+    s += `<path d="${d}" fill="${colors[j]}" opacity="0.8"/>`;
+    base = top;
+  });
+  rows.forEach((r,i)=>{ if (r.ym.endsWith('-01') || r.ym.endsWith('-07')) s += `<text x="${xs(i)}" y="${H-8}" text-anchor="middle">${lab(r.ym)}</text>`; });
+  s += `<line class="cross" x1="0" x2="0" y1="${mt}" y2="${H-mb}" stroke="var(--fg)" stroke-dasharray="3 3" style="display:none"/>`;
+  s += `<rect x="${ml}" y="${mt}" width="${W-ml-mr}" height="${H-mt-mb}" fill="transparent"/></svg>`;
+  box.innerHTML = s; scrollEnd(box);
+  $('#mix-legend').innerHTML = cols.map((c,j)=>`<span><i class="swatch" style="background:${colors[j]}"></i>${c}</span>`).join('');
+  attachTip(box, box.querySelector('svg'), x=>{ const i=Math.round((x-ml)/(W-ml-mr)*(m-1)); return (i<0||i>m-1)?null:i; }, i=>{ const r=rows[i]; return {x:xs(i), html:`<div class="t">${lab(r.ym)}</div>`+cols.map((c,j)=>`<div class="r"><span><i class="swatch" style="background:${colors[j]}"></i>${c}</span><span>${r.sh[j].toFixed(1)}% · ${fmtB(r.amt[j])}</span></div>`).join('')}; });
+  const e = rows[m-1], y = rows[m-13];
+  $('#mix-kv').innerHTML = cols.map((c,j)=>`<div class="k"><i class="swatch" style="background:${colors[j]};vertical-align:-1px;margin-right:6px"></i>${c}</div><div class="v">${fmtB(e.amt[j])} · ${e.sh[j].toFixed(1)}% <span style="color:var(--muted)">(${pct(e.sh[j]-y.sh[j])} pt y/y)</span></div>`).join('') + `<div class="k total">Total marketable</div><div class="v total">${fmtB(e.tot)}</div>`;
+})();
+
+// ---------- holders ----------
+(function(){
+  const H = DATA.holders; const top = H.slice(0,12); const rest = H.slice(12);
+  const restCur = rest.reduce((s,h)=>s+h.cur,0) + DATA.holders_other, restPrior = rest.reduce((s,h)=>s+h.prior,0) + DATA.holders_other_prior;
+  const total = H.reduce((s,h)=>s+h.cur,0) + DATA.holders_other;
+  const grp = name => /Old-Age|Disability Insurance/.test(name) ? 'ss' : /Hospital Insurance|Supplementary Medical/.test(name) ? 'med' : /Retirement|Retiree/.test(name) ? 'ret' : 'oth';
+  const short = {
+    'Federal Old-Age And Survivors Insurance Trust Fund':['Social Security OASI','Old-Age & Survivors Insurance'],
+    'Department Of Defense Military Retirement Fund':['Military Retirement Fund','Dept. of Defense'],
+    'Civil Service Retirement And Disability Fund, Office Of Personnel Management':['Civil Service Retirement','CSRDF, OPM'],
+    'Department Of Defense, Medicare Eligible Retiree Fund':['DoD Medicare-Eligible Retiree','health care fund'],
+    'Federal Hospital Insurance Trust Fund':['Medicare Part A (HI)','Hospital Insurance'],
+    'Federal Disability Insurance Trust Fund':['Social Security DI','Disability Insurance'],
+    'FHA, Mutual Mortgage Insurance Capital Reserve Account, Housing and Urban Development':['FHA Mutual Mortgage Insurance','capital reserve, HUD'],
+    'Federal Supplementary Medical Insurance Trust Fund':['Medicare Parts B & D (SMI)','Supplementary Medical Insurance'],
+    'Deposit Insurance Fund':['FDIC Deposit Insurance Fund',''],
+    'Unemployment Trust Fund':['Unemployment Trust Fund',''],
+    'Nuclear Waste Disposal Fund, Department Of Energy':['Nuclear Waste Disposal Fund','Dept. of Energy'],
+    'Pension Benefit Guaranty Corporation':['Pension Benefit Guaranty Corp.',''],
+  };
+  const mx = top[0].cur;
+  const line = (name, sub, cur, prior, g) => `<div class="holder"><div class="n" title="${name}">${name}<small>${sub||'&nbsp;'}</small></div><div class="bar ${g}"><i style="width:${(cur/mx*100).toFixed(1)}%"></i></div><div class="v">${fmtB(cur)}</div><div class="f ${cur-prior>0?'pos':cur-prior<0?'neg':''}">${fmtB(cur-prior,true)}</div></div>`;
+  let h = `<div class="holder head"><div>Fund</div><div></div><div class="v">Held</div><div class="f">Net flow</div></div>`;
+  top.forEach(x=>{ const s = short[x.name]||[x.name,'']; h += line(s[0], s[1], x.cur, x.prior, grp(x.name)); });
+  h += line('All other accounts', 'about 140 smaller funds', restCur, restPrior, 'oth');
+  h += `<div class="holder sum" style="font-weight:600;border-top:1px solid var(--line);padding-top:6px"><div class="n">Total intragovernmental GAS</div><div></div><div class="v">${fmtB(total)}</div><div class="f">${fmtB(total-(H.reduce((s,x)=>s+x.prior,0)+DATA.holders_other_prior),true)}</div></div>`;
+  $('#holders').innerHTML = h;
+  const ss = H.filter(x=>grp(x.name)==='ss').reduce((s,x)=>s+x.cur,0), med = H.filter(x=>grp(x.name)==='med').reduce((s,x)=>s+x.cur,0), ret = H.filter(x=>grp(x.name)==='ret').reduce((s,x)=>s+x.cur,0);
+  $('#hold-sub').textContent = `Government Account Series by fund, from Table III of the ${labLong(DATA.asof)} statement. Social Security holds ${fmtB(ss)} (${(ss/total*100).toFixed(0)}%), Medicare ${fmtB(med)}, and federal & military retirement funds ${fmtB(ret)} (${(ret/total*100).toFixed(0)}%). Net flow is the month's issued less redeemed: negative means the fund redeemed more securities than it bought that month.`;
+})();
+
+// ---------- debt limit ----------
+(function(){
+  const t = DATA.table2; const used = t.subject_to_limit[2]/t.limit*100;
+  $('#meter').innerHTML = `<div class="track"><div class="fill" style="width:${used.toFixed(2)}%"></div></div><div class="marks"><span>0</span><span>${used.toFixed(1)}% used · ${fmtB(t.balance)} of room</span><span>Limit ${fmtT(t.limit)}</span></div>`;
+  $('#limit-kv').innerHTML = `<div class="k">Total public debt outstanding</div><div class="v">${fmtM(t.total[2])}</div>
+    <div class="k">less: other debt not subject to limit</div><div class="v">−${fmtM(t.other_debt_not_subject[2])}</div>
+    <div class="k">less: unamortized discount</div><div class="v">−${fmtM(t.unamortized_discount[2])}</div>
+    <div class="k">less: Federal Financing Bank</div><div class="v">−${fmtM(t.ffb[2])}</div>
+    <div class="k">plus: guaranteed debt of agencies</div><div class="v">+${fmtM(t.guaranteed[2])}</div>
+    <div class="k total">Total public debt subject to limit</div><div class="v total">${fmtM(t.subject_to_limit[2])}</div>
+    <div class="k">Statutory debt limit</div><div class="v">${fmtM(t.limit)}</div>
+    <div class="k total">Balance of statutory debt limit</div><div class="v total">${fmtM(t.balance)}</div>`;
+  $('#limit-notes').innerHTML = `<p>The limit applies to face value, so the unamortized discount on bills and other securities sold below par (${fmtB(t.unamortized_discount[2])}, of which ${fmtB(t.unamortized_discount[1])} sits in intragovernmental accounts) is excluded, as are Federal Financing Bank securities and a few legacy instruments such as United States Notes and silver certificates.</p><p>At the trailing 12-month pace of ${fmtB((last[3]-yago[3])/12)} a month in total debt, the remaining ${fmtB(t.balance)} covers about ${(t.balance/((last[3]-yago[3])/12)).toFixed(1)} months before extraordinary measures would be needed, absent a change in the limit.</p>`;
+})();
+
+// ---------- last 24 months table ----------
+(function(){
+  const rows = T.slice(-24).reverse();
+  let h = `<colgroup><col style="width:70px"><col style="width:82px"><col style="width:68px"><col style="width:82px"><col style="width:68px"><col style="width:82px"><col style="width:68px"></colgroup><thead><tr><th>Month</th><th>Public</th><th>Δ</th><th>Intragov.</th><th>Δ</th><th>Total</th><th>Δ</th></tr></thead><tbody>`;
+  rows.forEach(r=>{ const i = T.indexOf(r), b = T[i-1]; const d = k => { const v=r[k]-b[k]; return `<td class="num ${v>0?'pos':v<0?'neg':''}">${fmtMs(v)}</td>`; };
+    h += `<tr><td>${lab(r[0])}</td><td class="num">${fmtM(r[1])}</td>${d(1)}<td class="num">${fmtM(r[2])}</td>${d(2)}<td class="num">${fmtM(r[3])}</td>${d(3)}</tr>`; });
+  $('#t24').innerHTML = h + '</tbody>';
+})();
+
+
+// ---------- tutorial ----------
+(function(){
+  const H = DATA.holders, t1 = DATA.table1;
+  const find = re => H.find(h=>re.test(h.name)) || {cur:0,prior:0,issued:0,redeemed:0};
+  const oasi = find(/Old-Age/), mil = find(/Military Retirement/), csr = find(/Civil Service Retirement/);
+  let peak = T[0], ps = 0; T.forEach(r=>{ const s=r[2]/r[3]; if (s>ps){ps=s; peak=r;} });
+  const F = {
+    pub: fmtT(last[1]), gov: fmtT(last[2]), tot: fmtT(last[3]),
+    gasgov: fmtT(t1.nonmarketable['Government Account Series'][1]), gasPub: fmtB(t1.nonmarketable['Government Account Series'][0]),
+    tsp: fmtB((DATA.gas_public.find(g=>/Thrift/.test(g.name))||{cur:0}).cur),
+    milIss: fmtB(mil.issued), milRed: fmtB(Math.abs(mil.redeemed)), milCur: fmtT(mil.cur),
+    oasiNet: fmtB(oasi.cur-oasi.prior, true),
+    pub12: fmtB(last[1]-yago[1], true), gov12: fmtB(last[2]-yago[2], true),
+    govShare: (last[2]/last[3]*100).toFixed(1)+'%', govPeak: (ps*100).toFixed(0)+'% in '+lab(peak[0]),
+    retTot: fmtT(mil.cur+csr.cur),
+    subj: fmtT(DATA.table2.subject_to_limit[2]),
+    ss: fmtT(H.filter(x=>/Old-Age|Disability Insurance/.test(x.name)).reduce((s,x)=>s+x.cur,0)),
+  };
+  document.querySelectorAll('#learn .n[data-f]').forEach(el=>{ el.textContent = F[el.dataset.f] ?? ''; });
+  $('#lvl').addEventListener('click', e=>{ const b=e.target.closest('button'); if(!b) return; [...$('#lvl').children].forEach(x=>x.setAttribute('aria-pressed', x===b)); [1,2,3].forEach(l=>{ $('#lesson-'+l).hidden = String(l)!==b.dataset.l; }); });
+})();
+
+$('#foot-note').innerHTML = `<strong>Freshness.</strong> Figures run through the ${labLong(DATA.asof)} statement, published early the following month. Treasury posts the next statement around the 5th business day; this page is refreshed from the API on request.`;
+})();
+</script>
+<script>
+const HOLD = {"asof":"2026-06-30","prior":"2025-06-30","release":"Sep 11, 2026","next":"Dec 10, 2026","groups":[{"name":"Foreign holders","color":"#2a78d6","cur":9269.2,"prior":9094.0,"parts":[["Bills",1419.7],["longer-term",7849.5]]},{"name":"Federal Reserve","color":"#141d27","cur":4082.7,"prior":3811.0,"parts":[["Bills",485.3],["longer-term",3597.4]]},{"name":"Money market funds","color":"#eda100","cur":3281.6,"prior":2614.0,"parts":[["Bills",2317.6],["longer-term",964.0]]},{"name":"Households and nonprofits","color":"#1baf7a","cur":2831.1,"prior":2642.3,"parts":[]},{"name":"Mutual funds and ETFs","color":"#e87ba4","cur":2550.8,"prior":2179.1,"parts":[["Mutual funds",1741.2],["ETFs",807.6],["closed-end funds",2.0]]},{"name":"Banks","color":"#7a5cd6","cur":2170.3,"prior":1979.9,"parts":[["U.S. banks",1799.1],["holding companies",129.4],["foreign bank offices",140.0],["credit unions",73.6],["banks in U.S. territories",28.2]]},{"name":"State and local governments","color":"#0e9aa7","cur":1647.6,"prior":1573.6,"parts":[]},{"name":"Pensions","color":"#c0662b","cur":1175.1,"prior":1044.5,"parts":[["Private",590.2],["state and local",561.6],["federal",23.3]]},{"name":"Insurers","color":"#8b6f47","cur":609.4,"prior":535.5,"parts":[["Property-casualty",380.2],["life",229.2]]},{"name":"Other","color":"#9aa5b1","cur":1395.7,"prior":1298.2,"parts":[["Broker-dealers",566.7],["Fannie, Freddie and other GSEs",274.2],["nonfinancial companies",218.6],["hedge funds",123.5],["other financial firms",99.3],["small businesses",94.8],["ABS issuers",18.6]]}],"held":[26772.3,29013.6],"disc":[1746.1,1864.7],"z1mkt":[28518.3,30878.3],"mspdMkt":[28638.0,31065.3],"public":[28953.5,31681.3]};
+const TIC = {"asof":"2026-08","release":"Oct 16, 2026","dates":["2014-01","2014-02","2014-03","2014-04","2014-05","2014-06","2014-07","2014-08","2014-09","2014-10","2014-11","2014-12","2015-01","2015-02","2015-03","2015-04","2015-05","2015-06","2015-07","2015-08","2015-09","2015-10","2015-11","2015-12","2016-01","2016-02","2016-03","2016-04","2016-05","2016-06","2016-07","2016-08","2016-09","2016-10","2016-11","2016-12","2017-01","2017-02","2017-03","2017-04","2017-05","2017-06","2017-07","2017-08","2017-09","2017-10","2017-11","2017-12","2018-01","2018-02","2018-03","2018-04","2018-05","2018-06","2018-07","2018-08","2018-09","2018-10","2018-11","2018-12","2019-01","2019-02","2019-03","2019-04","2019-05","2019-06","2019-07","2019-08","2019-09","2019-10","2019-11","2019-12","2020-01","2020-02","2020-03","2020-04","2020-05","2020-06","2020-07","2020-08","2020-09","2020-10","2020-11","2020-12","2021-01","2021-02","2021-03","2021-04","2021-05","2021-06","2021-07","2021-08","2021-09","2021-10","2021-11","2021-12","2022-01","2022-02","2022-03","2022-04","2022-05","2022-06","2022-07","2022-08","2022-09","2022-10","2022-11","2022-12","2023-01","2023-02","2023-03","2023-04","2023-05","2023-06","2023-07","2023-08","2023-09","2023-10","2023-11","2023-12","2024-01","2024-02","2024-03","2024-04","2024-05","2024-06","2024-07","2024-08","2024-09","2024-10","2024-11","2024-12","2025-01","2025-02","2025-03","2025-04","2025-05","2025-06","2025-07","2025-08","2025-09","2025-10","2025-11","2025-12","2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07","2026-08"],"countries":["Japan","United Kingdom","China, Mainland","Belgium","Canada","Cayman Islands","Luxembourg","France","Ireland","Taiwan","Switzerland","Singapore","Hong Kong","India","Norway","Brazil","Saudi Arabia","Korea, South","United Arab Emirates","Bermuda"],"v":{"Japan":[1201.4,1210.8,1200.2,1209.7,1220.1,1219.3,1219.0,1230.1,1221.8,1222.4,1241.5,1230.9,1238.6,1224.4,1224.7,1215.9,1214.9,1197.1,1200.8,1197.0,1177.1,1149.2,1144.9,1122.4,1123.6,1133.2,1137.1,1142.8,1133.2,1147.1,1154.6,1144.0,1136.4,1131.9,1108.6,1090.8,1102.5,1115.7,1120.7,1106.9,1111.5,1090.3,1113.3,1101.7,1096.0,1094.0,1084.1,1061.6,1066.0,1060.1,1044.4,1031.8,1048.9,1032.5,1035.5,1029.9,1028.0,1018.5,1036.6,1039.7,1064.9,1068.8,1078.1,1064.0,1101.0,1122.8,1131.2,1174.6,1146.2,1168.5,1160.6,1155.2,1211.8,1268.6,1272.6,1266.5,1260.4,1261.6,1293.0,1278.4,1276.2,1273.1,1260.8,1251.3,1276.9,1258.0,1240.5,1276.8,1266.2,1279.7,1310.2,1319.7,1299.6,1320.4,1325.5,1300.8,1299.9,1303.0,1229.0,1215.0,1219.9,1232.7,1230.7,1196.0,1116.4,1064.4,1081.8,1075.1,1102.9,1080.7,1086.6,1125.8,1096.1,1104.1,1111.8,1115.5,1086.4,1098.2,1127.5,1115.3,1140.6,1147.6,1167.0,1126.1,1106.0,1091.4,1093.5,1106.0,1095.5,1101.5,1087.1,1061.5,1079.3,1130.3,1135.1,1140.9,1142.8,1154.8,1155.4,1183.9,1189.3,1200.0,1202.7,1185.5,1225.3,1239.3,1191.6,1209.9,1143.1,1116.7,1103.9,1068.3],"United Kingdom":[151.2,164.6,163.5,172.0,166.9,161.7,161.5,162.4,157.7,160.0,163.3,179.7,197.8,183.2,190.2,185.8,190.2,205.3,203.4,213.2,203.9,200.6,204.5,207.1,209.6,230.6,226.5,216.4,217.1,231.4,210.0,204.9,217.6,207.3,215.8,217.2,214.1,217.5,228.3,231.5,236.4,236.0,229.6,225.0,237.4,225.9,237.5,249.9,243.3,250.6,263.6,262.6,265.0,274.2,271.7,272.6,276.3,263.9,258.9,288.0,290.1,302.5,317.1,300.8,323.1,341.1,406.8,434.6,412.7,412.7,400.5,392.1,450.3,477.1,469.7,429.2,445.8,445.7,424.6,419.4,428.5,442.8,420.5,440.6,438.7,459.4,443.1,431.7,467.6,533.6,541.6,568.9,566.4,580.2,621.8,649.3,610.7,627.0,636.5,614.3,636.5,617.3,636.6,646.5,664.8,641.3,575.1,573.7,598.0,576.5,633.1,625.1,606.6,624.4,609.3,627.5,604.7,630.0,650.8,688.6,701.8,711.5,736.4,714.6,728.6,746.5,733.5,749.2,769.3,746.5,766.9,722.8,740.2,750.3,779.2,807.6,809.4,855.6,895.9,901.3,862.5,875.4,879.8,863.2,879.8,897.3,927.1,937.5,948.6,939.9,998.3,1009.5],"China, Mainland":[1275.6,1272.9,1272.1,1263.2,1270.9,1268.4,1264.9,1269.7,1266.3,1252.7,1250.4,1244.3,1239.1,1223.7,1261.0,1263.4,1270.3,1271.2,1268.8,1270.5,1258.0,1254.8,1264.5,1246.1,1238.0,1252.3,1244.6,1242.8,1244.0,1240.8,1218.8,1185.1,1157.0,1115.7,1049.3,1058.4,1051.1,1059.7,1088.1,1092.2,1102.2,1146.5,1166.9,1201.7,1182.3,1189.2,1176.6,1184.9,1168.2,1176.7,1187.7,1181.9,1183.1,1191.2,1171.0,1165.1,1151.4,1138.9,1121.4,1124.3,1126.7,1130.9,1120.5,1113.0,1110.2,1112.5,1110.3,1103.5,1102.4,1101.5,1089.1,1069.9,1078.6,1092.3,1081.6,1072.8,1083.7,1074.4,1073.4,1068.0,1061.7,1054.0,1063.0,1072.3,1095.2,1104.2,1100.4,1096.1,1078.4,1061.8,1068.3,1047.0,1047.5,1065.4,1052.9,1040.3,1033.8,1028.7,1013.2,976.0,951.8,938.8,939.2,938.6,901.7,877.9,870.3,867.1,859.3,849.0,869.3,868.9,846.7,835.8,821.8,805.4,778.1,769.6,782.0,816.3,797.7,775.0,767.4,770.7,768.3,780.2,776.5,774.6,772.0,760.1,768.6,759.0,760.8,784.3,765.4,743.6,732.7,731.4,695.6,699.7,699.2,687.7,683.9,684.4,695.3,694.2,653.3,651.1,659.3,633.4,618.0,590.7],"Belgium":[310.3,341.2,381.4,366.4,362.4,364.1,352.6,359.9,353.9,348.1,335.7,335.4,354.6,345.3,252.8,228.9,202.8,207.7,155.5,110.7,135.8,138.3,143.6,121.7,137.5,143.0,153.8,153.6,151.7,156.3,154.4,157.0,142.7,116.9,113.5,120.4,112.2,105.7,109.9,96.4,98.7,98.3,99.4,96.9,104.8,116.0,115.3,119.2,124.6,126.8,126.7,139.5,150.5,154.7,154.5,154.3,164.7,169.7,173.0,185.1,191.5,181.3,186.6,179.8,190.5,200.1,203.3,215.0,215.5,205.6,202.4,207.4,206.5,218.0,206.1,210.2,212.1,218.8,211.8,214.9,218.1,239.5,240.5,253.5,248.2,236.7,235.8,234.8,236.4,228.5,220.5,227.7,220.9,225.8,224.9,271.6,243.0,258.4,264.5,255.6,268.2,273.5,285.4,287.8,325.0,327.2,334.4,351.2,331.1,330.9,337.0,336.6,335.6,331.8,318.7,316.7,317.1,285.4,296.5,314.4,293.1,320.1,317.2,312.5,313.1,318.0,315.9,325.0,366.6,349.7,361.3,374.6,377.7,394.7,402.1,411.0,415.5,430.3,425.4,451.1,463.6,465.5,481.0,477.3,451.0,454.7,454.0,459.9,472.0,482.5,470.7,490.5],"Canada":[55.5,59.4,60.2,60.7,62.8,66.2,66.3,64.9,64.6,62.5,64.1,69.0,69.7,70.5,73.1,72.0,70.9,68.1,69.2,66.8,69.2,66.8,68.3,72.4,70.7,69.4,81.5,81.9,76.6,85.3,81.3,81.9,85.0,81.4,81.2,82.9,80.0,81.9,77.5,80.4,80.1,76.5,75.5,73.6,75.0,78.0,82.4,86.1,86.1,89.1,93.0,89.4,96.7,102.3,96.1,96.2,94.1,101.9,106.3,96.2,99.2,97.6,99.6,102.1,100.5,111.3,148.4,157.8,153.4,157.1,155.2,143.3,157.9,148.3,131.5,136.3,129.9,127.6,133.9,131.1,128.0,131.3,127.4,119.9,126.6,112.7,106.0,116.1,121.1,167.8,167.0,169.2,167.1,200.3,195.1,219.7,217.6,224.1,236.5,234.7,225.5,206.2,227.9,228.2,199.9,218.2,228.8,215.1,254.1,235.3,245.3,247.1,265.9,275.6,293.9,295.1,280.5,281.5,321.2,348.5,351.3,365.3,369.4,341.6,356.3,372.5,375.3,362.9,367.9,363.7,372.4,380.3,350.8,406.4,426.3,368.5,430.1,438.9,381.8,444.0,476.1,419.0,472.4,468.3,395.8,446.4,439.6,397.1,435.8,459.6,426.3,464.6],"Cayman Islands":[162.4,159.5,167.8,162.3,167.6,169.8,169.4,165.2,169.3,175.3,182.6,187.9,191.2,194.8,201.8,203.3,216.1,221.1,224.5,228.4,224.3,226.0,236.5,249.8,251.1,255.6,265.4,259.4,260.7,270.0,264.6,264.4,262.6,262.2,260.8,261.3,254.3,256.8,248.2,243.6,250.1,249.3,240.5,242.9,246.9,247.2,240.4,170.6,168.2,177.5,166.1,181.3,186.2,191.3,198.1,197.7,200.4,208.3,207.6,225.6,209.2,210.0,219.4,217.2,216.1,225.0,233.2,248.8,250.9,236.8,234.2,238.2,225.1,228.2,209.4,213.1,216.7,229.6,222.3,229.0,231.6,221.5,222.9,222.9,216.8,216.0,215.2,226.4,229.4,260.1,263.8,263.5,266.8,271.9,262.1,262.8,272.1,275.9,293.9,292.5,295.4,302.3,293.4,308.6,301.5,291.7,293.4,292.6,292.3,292.6,297.3,285.1,273.3,284.4,305.7,318.7,323.4,333.2,329.0,314.8,327.9,309.9,310.8,326.0,342.7,326.3,380.1,424.2,424.6,418.3,405.3,423.0,406.9,416.0,453.5,446.4,441.2,440.9,436.8,410.5,426.8,418.5,427.6,421.6,433.2,443.4,460.1,471.6,471.3,453.1,460.1,463.0],"Luxembourg":[135.5,136.9,144.8,141.2,141.5,145.3,145.6,150.5,156.1,162.5,166.6,171.8,176.0,179.2,176.7,171.0,177.0,183.4,185.2,184.8,191.0,188.2,193.0,199.6,200.6,209.1,221.6,221.7,222.5,225.2,224.2,220.7,228.3,217.8,222.4,224.3,218.9,217.8,218.3,212.1,208.0,211.6,213.0,213.3,213.9,217.9,218.3,217.6,220.9,218.6,221.5,213.8,208.9,220.9,221.5,224.0,227.2,225.4,225.7,230.5,226.7,228.9,230.2,223.7,229.6,230.5,229.2,244.2,252.3,263.0,261.9,254.6,255.2,260.8,246.1,265.5,262.7,267.3,264.7,268.8,262.5,266.2,267.8,287.7,280.9,282.1,282.8,290.4,287.6,302.1,291.7,294.2,312.0,314.3,333.3,327.8,313.0,316.4,303.2,296.2,296.5,309.3,306.5,308.4,299.9,298.4,311.3,329.3,318.2,327.2,328.6,332.3,331.5,330.7,352.0,365.8,373.7,345.4,371.3,339.9,348.1,355.8,366.2,359.2,367.3,374.2,389.3,395.7,407.2,413.5,417.8,423.9,409.9,412.5,412.4,411.0,412.6,403.2,403.8,410.8,420.6,418.5,425.4,434.9,445.6,445.5,431.9,430.6,435.5,433.7,442.1,448.2],"France":[57.5,54.9,57.1,62.3,65.4,63.1,54.8,59.0,72.3,59.7,67.3,79.2,75.5,70.2,80.4,74.9,51.1,53.8,49.3,56.2,49.8,49.7,56.9,59.6,56.7,76.6,67.0,54.5,57.8,51.6,61.6,68.2,69.5,61.4,68.4,61.4,60.8,64.4,69.9,66.9,74.4,72.2,80.0,76.0,78.2,77.9,76.6,80.9,78.4,77.0,80.9,82.6,89.6,93.4,111.0,113.6,97.7,109.4,131.6,110.8,112.5,115.9,109.6,124.7,125.1,131.5,136.4,134.0,132.2,133.4,123.0,127.7,134.0,147.6,156.0,137.7,130.5,144.1,130.0,133.3,135.1,136.9,132.4,111.3,121.5,108.7,114.4,107.2,108.8,226.7,235.9,238.1,242.0,239.7,227.3,223.9,232.9,238.7,246.0,242.9,242.5,236.3,231.8,232.7,206.7,217.4,194.7,180.3,178.4,171.2,173.9,187.3,202.0,207.8,219.3,217.4,215.7,222.5,244.7,236.7,256.4,271.0,271.9,276.7,283.1,305.4,291.2,312.5,329.0,330.2,332.5,332.3,335.4,354.1,363.1,360.6,375.1,373.8,391.0,389.1,375.5,390.2,376.1,368.9,380.5,395.1,393.0,393.3,393.1,389.9,348.4,363.4],"Ireland":[166.2,171.4,173.3,174.3,170.0,177.1,174.7,176.1,178.8,188.5,193.9,202.0,203.7,206.5,214.3,215.7,209.0,217.7,216.1,215.9,222.0,232.4,246.0,264.4,252.1,255.2,263.7,257.4,259.3,269.8,269.2,266.4,270.9,273.9,275.2,288.2,293.7,309.0,313.9,301.9,297.8,304.4,312.3,309.0,310.6,312.4,324.3,326.6,327.7,314.2,318.1,300.6,301.0,301.1,300.2,311.6,290.4,287.3,279.6,279.9,270.1,274.0,277.6,269.7,270.7,261.8,257.3,272.3,274.1,285.4,289.7,281.9,271.7,282.8,271.6,301.3,324.2,330.2,330.7,335.2,315.7,316.3,314.2,318.1,313.6,316.0,309.8,307.0,304.9,322.7,319.8,326.4,309.6,324.1,330.0,334.5,308.5,314.7,315.7,309.4,288.6,285.4,277.5,275.6,265.4,245.1,241.5,241.7,243.1,240.9,240.3,234.4,234.7,271.3,257.1,281.4,279.4,287.9,304.7,349.7,334.6,341.2,340.7,330.0,336.8,336.1,341.2,350.9,356.3,336.7,343.1,339.4,329.7,334.3,324.8,333.1,319.3,310.2,320.2,340.0,340.0,339.9,340.3,341.0,342.1,350.8,355.9,345.3,357.2,353.5,350.2,352.1],"Taiwan":[179.1,180.0,176.4,175.7,174.4,179.4,175.4,172.9,173.4,172.9,170.6,174.4,170.6,165.9,168.2,170.3,174.2,175.6,172.4,172.5,178.1,178.1,177.5,178.7,183.3,182.7,182.3,185.2,181.5,187.9,192.1,190.0,189.3,188.6,183.1,189.3,183.6,183.6,183.8,185.6,181.2,185.9,184.1,182.0,183.9,181.7,179.9,180.9,175.4,170.7,170.1,168.1,164.8,162.6,164.2,163.2,166.5,162.4,155.4,157.3,168.3,164.9,168.8,171.1,172.0,175.1,178.7,185.9,189.0,191.2,188.6,193.1,199.2,201.9,205.0,201.7,199.2,204.6,209.7,212.0,213.5,218.2,222.3,235.4,239.6,234.5,231.5,234.0,236.3,239.3,242.2,237.2,239.4,242.4,247.2,249.5,247.1,247.0,236.9,226.9,229.1,232.3,238.2,231.5,215.3,214.6,224.1,225.4,234.6,231.6,239.5,244.5,239.8,241.3,243.0,241.0,236.3,231.4,238.0,254.0,257.6,257.5,261.0,259.3,265.4,267.9,277.3,287.1,291.1,287.9,286.0,292.3,298.6,306.2,308.2,311.5,304.8,307.2,308.8,313.4,312.5,309.4,312.9,310.6,307.8,313.5,300.8,300.9,306.0,302.5,296.1,298.4],"Switzerland":[173.8,168.1,175.8,177.6,174.0,175.9,184.1,189.1,186.2,184.3,183.8,190.1,205.5,201.7,211.8,215.8,222.7,217.0,218.4,222.7,227.6,225.6,227.1,231.7,237.9,236.6,230.4,230.0,229.2,237.9,241.3,238.3,241.0,235.6,230.3,230.0,224.0,234.3,227.6,234.1,239.4,244.1,244.5,248.2,253.3,254.0,250.9,249.6,251.1,248.0,245.4,242.2,243.4,235.5,233.1,232.0,226.9,225.2,227.5,229.9,226.9,221.4,226.3,226.9,231.3,232.4,228.3,233.0,231.1,233.2,233.4,237.5,238.1,243.7,244.6,241.3,243.1,247.3,250.4,253.4,255.4,255.5,253.3,255.5,254.0,257.7,254.7,260.9,264.8,302.0,296.2,292.6,294.4,289.9,288.4,284.0,295.4,278.0,270.7,268.0,287.1,291.5,283.1,290.6,273.3,258.4,266.6,269.5,290.5,290.1,305.4,298.3,304.5,306.2,302.2,283.5,280.1,275.7,276.4,287.4,284.2,281.1,286.7,290.5,290.5,287.4,289.4,299.3,305.5,297.9,298.7,298.7,301.2,290.8,311.7,310.9,303.7,300.6,303.2,303.0,301.8,302.0,300.4,294.1,289.2,286.7,286.4,288.6,281.1,284.9,284.8,285.8],"Singapore":[85.9,87.4,91.3,93.1,97.5,98.1,101.0,106.3,108.5,108.0,110.1,110.0,109.7,109.7,110.6,109.7,110.3,113.6,112.7,116.0,122.9,111.6,108.3,110.3,113.9,111.5,112.7,109.4,109.3,107.7,103.5,105.9,101.4,99.2,96.9,102.2,103.3,107.4,103.1,107.0,107.9,106.4,112.3,119.3,125.2,130.4,124.2,125.0,122.6,118.0,117.8,118.0,118.9,122.1,127.6,129.9,134.5,133.0,128.8,120.8,127.8,130.5,138.8,139.3,150.4,139.6,137.9,145.5,141.8,138.8,150.6,147.9,160.7,165.4,151.5,146.1,142.1,150.5,158.6,160.3,159.0,162.0,163.8,168.1,164.3,161.4,170.2,171.1,176.3,188.0,192.6,191.5,189.3,188.5,189.4,193.6,191.6,192.0,190.9,182.1,177.1,180.9,187.2,188.3,176.4,175.8,186.3,182.9,187.6,189.9,194.9,201.1,203.2,187.3,186.6,184.2,187.3,190.5,196.2,196.0,199.1,199.3,202.4,203.3,209.8,215.0,229.8,234.8,243.8,244.7,252.2,249.0,247.6,260.5,263.2,248.0,249.6,253.5,252.4,261.0,258.6,272.3,272.2,278.4,273.4,280.0,274.3,277.5,278.0,284.4,277.7,277.9],"Hong Kong":[160.3,160.4,155.1,154.5,155.2,157.6,158.7,160.5,159.0,161.0,165.6,172.6,170.8,175.4,180.7,183.1,186.3,181.3,182.8,193.2,198.6,197.0,196.5,200.1,201.5,201.5,199.7,194.5,191.9,184.7,189.6,191.5,189.8,186.3,185.5,191.4,189.4,197.1,195.1,196.8,196.6,201.1,196.7,194.5,194.4,192.3,194.9,194.7,194.3,196.6,196.3,194.1,191.9,196.4,194.4,193.2,192.3,185.0,189.2,196.3,200.9,203.1,209.0,207.2,205.3,217.3,235.8,252.2,242.5,243.6,249.7,249.7,253.0,268.4,256.0,259.4,269.0,262.2,262.7,246.7,241.7,226.6,223.8,224.1,223.9,225.0,227.0,215.9,224.1,219.2,227.1,219.5,229.5,233.4,234.4,225.2,225.6,205.4,207.7,195.0,185.6,187.3,192.8,189.8,178.7,185.0,201.2,214.5,221.0,212.5,223.1,222.2,216.1,198.9,205.9,202.6,197.0,199.1,211.1,238.0,232.7,216.7,208.2,226.6,224.2,226.6,238.6,243.7,243.7,261.8,265.8,255.0,256.0,273.4,262.4,246.6,252.1,241.8,247.5,251.9,238.9,252.0,256.6,268.4,259.9,269.2,278.3,269.1,271.9,255.8,258.3,261.5],"India":[68.1,67.0,70.2,68.7,70.1,72.9,79.7,80.4,80.0,77.5,80.5,83.0,91.2,101.7,107.7,110.3,114.0,117.0,116.4,115.6,113.5,116.6,115.4,116.8,119.8,118.8,118.9,121.6,118.0,117.2,123.7,122.9,122.7,123.0,118.7,118.2,113.7,112.3,117.1,124.1,127.3,130.3,135.7,138.9,145.1,141.4,140.8,144.7,148.6,152.9,157.0,152.8,148.9,147.3,142.6,140.6,144.0,138.2,138.5,141.3,144.9,144.3,152.0,155.3,156.9,162.7,159.9,162.2,160.7,161.4,159.2,162.0,164.3,177.5,156.5,157.4,169.9,182.7,194.6,196.5,213.5,222.4,220.2,216.2,211.6,204.4,200.0,208.7,215.8,220.2,219.2,217.0,218.4,210.7,205.2,198.9,198.6,199.8,199.8,199.0,203.7,208.8,212.0,221.2,212.6,213.0,219.0,224.1,232.0,231.2,237.9,238.7,238.3,235.4,233.1,232.5,229.1,222.0,224.9,233.7,236.1,234.7,240.6,233.5,237.8,241.9,238.8,245.9,247.2,241.4,234.0,219.1,225.7,228.0,239.9,232.5,235.3,227.4,219.7,219.4,202.7,190.4,186.5,182.9,190.4,190.6,183.0,181.0,181.3,186.4,202.6,219.7],"Norway":[88.2,89.7,88.2,85.6,85.3,87.1,84.8,87.0,81.8,77.2,74.5,81.6,73.6,73.2,71.6,66.6,64.8,67.2,66.5,69.4,69.8,70.1,69.7,69.1,68.1,69.8,72.3,66.2,61.9,58.7,52.9,53.7,56.8,51.6,47.7,52.5,43.1,45.8,48.9,51.4,48.3,53.7,54.9,58.0,64.1,60.6,55.3,51.1,46.9,50.4,40.2,39.4,49.7,49.7,61.1,66.7,63.6,61.3,47.3,84.9,90.9,97.1,99.5,97.1,99.3,98.6,96.9,101.0,99.2,100.3,96.0,90.1,97.7,103.3,98.0,93.2,87.6,88.7,89.9,90.6,90.5,82.9,89.0,87.5,91.4,97.5,94.3,109.2,113.5,115.8,119.1,119.9,120.8,105.0,100.2,98.3,115.8,120.1,116.7,115.6,109.0,112.9,112.5,111.1,99.6,95.7,97.7,92.0,104.4,116.6,119.1,122.8,122.0,126.4,127.5,126.3,121.6,121.2,113.6,139.3,150.1,141.3,151.9,142.3,146.1,157.1,160.3,166.0,173.5,167.1,162.5,157.6,173.1,161.8,200.1,195.9,187.3,195.1,208.0,214.9,215.9,193.7,218.9,208.1,218.8,223.0,217.4,214.7,207.3,203.2,206.9,214.0],"Brazil":[246.0,243.9,245.3,245.8,250.1,253.7,258.6,261.7,262.3,261.7,264.2,255.8,256.5,259.9,261.5,262.7,258.5,256.3,257.9,255.3,251.6,255.0,255.0,254.8,255.7,247.3,246.4,249.1,249.5,251.6,254.1,256.1,258.1,254.7,258.3,259.2,257.7,257.7,259.5,267.7,269.7,269.7,271.9,273.6,272.8,270.0,265.3,256.8,265.7,272.9,286.0,294.1,299.2,300.1,299.7,317.8,317.0,313.9,311.4,303.1,305.1,307.7,311.6,306.7,305.7,311.7,309.9,313.4,303.0,298.5,293.3,281.8,283.3,285.9,264.4,259.5,264.4,264.1,265.7,265.0,265.1,262.9,262.2,258.3,260.4,259.0,255.5,255.3,251.8,249.1,248.5,248.9,249.0,247.7,244.9,240.6,236.1,237.4,233.3,229.2,228.4,226.1,232.9,227.3,221.8,220.1,225.9,217.4,214.0,215.2,224.4,229.8,230.0,227.5,224.7,223.2,223.0,219.4,224.9,230.3,226.8,225.6,227.1,223.6,223.2,227.0,229.1,233.3,234.6,228.8,229.0,201.6,199.4,207.3,208.4,212.1,212.0,215.4,201.8,184.6,172.8,167.8,168.2,168.7,168.0,170.6,168.0,168.6,168.9,168.4,168.0,168.4],"Saudi Arabia":[80.4,79.5,82.7,84.9,87.9,90.9,92.5,92.9,93.4,93.9,93.5,97.9,100.8,101.4,102.8,105.1,107.2,109.5,110.1,112.8,112.3,113.0,114.7,118.9,123.7,119.9,116.8,113.0,103.7,98.2,96.5,93.0,89.4,96.7,100.1,102.8,112.3,116.7,124.5,126.8,134.0,142.0,142.5,137.9,136.7,145.2,147.6,147.4,143.7,150.9,151.2,159.9,162.2,164.3,166.8,169.5,176.1,171.3,169.9,172.2,163.3,167.6,170.0,176.6,179.0,179.6,180.8,183.8,181.5,178.9,179.7,179.8,182.9,184.4,159.1,125.3,123.5,124.9,124.6,130.0,131.2,134.2,137.6,136.4,135.1,132.9,130.8,130.3,127.3,127.6,128.1,124.1,123.8,116.5,116.5,119.0,119.4,116.7,115.5,115.7,114.7,119.2,121.6,122.1,121.0,120.7,121.5,119.7,111.0,111.7,116.2,113.3,111.3,110.7,109.2,112.0,117.1,117.5,128.1,132.0,133.5,131.1,135.9,135.4,136.3,140.2,142.7,142.8,143.9,139.2,135.6,137.5,126.9,126.4,131.6,133.8,127.7,130.5,131.6,133.0,134.2,134.3,148.8,149.5,134.8,160.4,152.0,140.1,140.3,142.5,142.4,141.2],"Korea, South":[55.6,56.7,52.7,55.3,56.3,57.5,56.1,56.9,54.5,57.3,55.4,68.3,65.6,63.8,67.2,71.8,74.3,76.7,74.4,72.1,69.4,69.1,72.6,74.6,74.2,78.2,84.1,83.0,80.5,82.1,85.9,90.2,88.5,86.7,85.0,93.2,95.6,96.9,97.1,93.8,100.1,96.8,97.9,95.0,94.3,100.1,98.5,96.3,101.8,101.3,100.6,104.7,104.8,106.1,109.1,110.2,110.8,111.1,110.2,114.8,117.3,115.5,119.9,115.1,117.3,115.2,116.8,117.8,118.5,117.1,117.2,121.9,121.1,116.1,110.8,120.0,117.3,122.7,123.1,122.7,123.2,119.1,122.8,130.9,125.2,125.7,122.9,120.3,123.2,130.9,126.1,129.0,130.1,125.4,132.2,130.7,123.8,121.9,118.9,117.3,115.3,111.9,111.9,117.5,104.9,98.7,100.4,102.6,105.8,110.8,113.9,111.5,115.4,115.1,115.8,117.8,112.9,112.9,116.0,117.2,116.9,118.2,115.0,119.0,119.8,117.2,123.1,123.3,127.3,127.3,127.5,124.9,122.2,124.6,125.8,121.7,124.2,126.5,132.3,135.8,142.7,145.0,145.1,140.6,141.3,140.9,136.8,135.2,132.3,134.7,131.5,134.2],"United Arab Emirates":[41.1,42.1,43.6,43.0,51.1,52.7,52.8,59.7,72.1,72.5,74.9,75.3,77.9,82.1,79.5,72.8,72.5,71.4,72.8,71.2,70.9,71.5,68.2,69.5,66.7,64.8,62.5,60.1,61.8,66.2,66.0,64.1,63.8,64.4,63.0,60.6,61.2,61.7,63.0,60.6,60.5,58.8,59.9,55.9,54.3,57.7,58.2,57.7,55.6,57.5,59.3,59.7,60.0,59.6,59.7,59.0,60.0,57.7,56.3,56.7,55.9,54.5,55.6,55.7,53.2,51.5,49.3,49.3,37.3,38.4,39.9,40.7,39.8,37.3,28.0,26.3,27.9,26.1,29.5,36.6,33.1,29.1,36.8,32.2,33.8,50.6,45.6,43.7,57.3,60.8,58.0,58.7,58.1,53.0,48.6,44.9,44.9,46.5,45.8,41.9,38.4,40.1,41.6,48.2,47.9,53.9,59.5,58.5,64.9,65.2,61.5,70.2,69.0,65.6,64.9,68.3,64.4,64.0,62.8,64.0,60.1,68.9,70.9,69.9,70.8,70.1,68.9,79.2,71.9,68.3,73.1,77.1,92.6,119.9,104.3,112.9,103.6,96.4,107.7,108.7,103.3,110.7,103.5,95.7,112.4,120.0,114.1,112.5,118.6,114.8,110.1,116.1],"Bermuda":[51.1,51.6,53.2,52.8,48.1,48.2,48.8,50.0,51.3,54.0,52.0,49.2,47.5,50.9,52.0,53.3,53.8,53.7,53.8,55.9,56.5,56.4,57.9,59.8,58.8,60.8,62.9,62.3,65.2,69.1,66.3,66.8,64.3,65.9,66.8,64.0,61.5,61.0,59.4,59.2,59.8,60.2,61.5,62.3,62.4,62.9,63.5,67.0,67.7,67.5,66.5,64.8,64.0,60.7,64.4,65.5,64.5,62.6,64.3,65.9,66.3,66.8,68.1,66.3,69.0,69.0,68.5,74.4,69.6,65.4,68.2,71.3,64.8,65.9,64.2,65.2,63.9,70.9,71.1,74.2,76.1,73.9,74.0,72.6,68.2,67.1,66.3,67.1,66.3,68.0,68.1,70.2,72.3,70.9,73.2,72.3,69.7,71.2,73.0,75.2,77.4,79.5,82.3,82.7,82.6,83.6,83.6,81.6,77.4,77.8,79.1,75.1,73.0,84.5,87.0,87.8,88.7,89.1,89.2,90.6,86.8,87.1,90.3,86.9,87.6,89.0,91.0,91.9,92.3,90.9,91.6,90.1,88.9,92.5,95.8,97.7,94.3,96.1,97.3,98.9,103.4,105.8,104.5,101.4,100.6,104.2,106.2,104.1,106.7,108.0,109.1,111.8],"Grand Total":[5841.3,5890.1,5948.3,5959.4,5974.5,6018.7,6002.6,6069.2,6069.2,6062.0,6114.8,6158.0,6218.7,6163.4,6172.6,6137.9,6134.8,6161.0,6117.4,6099.6,6104.0,6045.3,6123.4,6144.2,6182.4,6241.5,6284.4,6236.7,6208.3,6279.1,6248.1,6197.1,6155.9,6043.6,5953.0,6002.8,5949.2,6012.5,6075.3,6060.5,6108.4,6151.9,6230.2,6249.4,6301.9,6324.1,6306.2,6211.3,6194.6,6221.7,6223.4,6180.0,6215.1,6225.0,6254.4,6278.6,6225.9,6200.3,6199.9,6270.1,6324.6,6374.5,6474.0,6433.9,6539.4,6625.9,6800.2,7036.4,6923.5,6946.4,6902.1,6844.2,7027.3,7226.0,6949.5,6903.1,6978.1,7052.1,7096.2,7082.0,7069.2,7070.4,7051.2,7070.7,7128.0,7108.8,7038.3,7078.6,7144.7,7518.9,7567.3,7578.8,7570.9,7660.7,7687.9,7740.4,7655.7,7703.5,7604.2,7443.1,7410.8,7416.9,7485.5,7492.7,7251.5,7133.2,7184.7,7194.7,7305.1,7254.9,7468.6,7506.0,7458.6,7563.2,7595.1,7620.5,7509.1,7476.7,7716.3,7940.0,7953.8,7999.3,8107.9,8036.2,8130.7,8299.3,8428.2,8611.4,8766.3,8693.5,8723.3,8620.8,8617.8,8899.3,9052.0,8998.7,9021.7,9093.6,9109.5,9249.1,9238.2,9231.3,9350.4,9270.5,9289.1,9487.3,9352.4,9350.1,9368.5,9298.5,9248.4,9331.7],"Foreign Official":[4068.0,4069.3,4053.8,4067.5,4092.2,4108.2,4117.6,4163.6,4148.0,4132.9,4142.6,4122.6,4134.7,4097.4,4138.6,4144.9,4173.3,4176.8,4171.6,4175.9,4145.6,4097.2,4114.6,4091.6,4092.1,4079.8,4069.2,4043.9,4022.2,4034.7,4008.3,3946.4,3899.4,3839.2,3768.2,3813.4,3784.8,3815.3,3880.1,3911.7,3935.3,3994.4,4034.5,4051.7,4070.4,4079.1,4054.7,4024.0,4001.4,4031.0,4051.7,4006.2,3990.9,3988.6,4007.8,4021.1,4010.1,3947.1,3901.2,3956.8,3986.3,4029.7,4080.9,4070.9,4112.1,4146.1,4139.3,4200.2,4150.9,4122.9,4101.2,4076.9,4169.9,4264.9,4117.9,4047.4,4105.9,4147.1,4191.2,4199.3,4198.9,4166.8,4176.2,4186.5,4224.5,4235.3,4202.1,4201.5,4226.0,4215.9,4254.1,4216.3,4207.9,4179.4,4161.0,4117.7,4130.0,4124.4,4025.3,3907.5,3866.3,3855.3,3895.0,3876.9,3713.7,3614.0,3662.0,3667.4,3703.8,3692.7,3769.9,3789.7,3782.7,3769.2,3758.8,3738.2,3691.0,3640.4,3684.1,3796.4,3799.1,3767.6,3816.9,3787.2,3797.7,3831.0,3846.4,3876.4,3914.1,3856.3,3861.9,3777.6,3803.8,3895.9,3923.4,3907.4,3877.1,3892.5,3886.5,3919.8,3872.6,3866.4,3912.3,3877.7,3941.8,4009.6,3903.0,3904.5,3845.9,3778.1,3773.1,3755.6]},"allOther":[1852.3,1842.7,1794.3]};
+(function(){
+const $ = s => document.querySelector(s);
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const dl = d => MON[+d.slice(5,7)-1] + ' ' + (d.length>7 ? (+d.slice(8,10))+', ' : '') + d.slice(0,4);
+const T = v => '$' + (v/1000).toFixed(2) + 'T';
+const B = v => Math.abs(v)>=1000 ? '$'+(v/1000).toFixed(2)+'T' : '$'+Math.round(v)+'B';
+const SB = v => (v>0?'+':v<0?'−':'') + B(Math.abs(v));
+const sg = (v,d=1) => (v>0?'+':v<0?'−':'') + Math.abs(v).toFixed(d);
+const cls = v => v>0.05?'pos':v<-0.05?'neg':'';
+$('#asof-h').textContent = dl(HOLD.asof); $('#asof-f').textContent = dl(TIC.asof);
+
+// ---------- domestic + foreign split ----------
+(function(){
+  const H = HOLD, c = 1, p = 0;
+  const gap = i => H.mspdMkt[i]-H.z1mkt[i], non = i => H.public[i]-H.mspdMkt[i];
+  const pub = H.public;
+  const rows = H.groups.map(g=>({name:g.name, color:g.color, cur:g.cur, prior:g.prior, parts:g.parts}));
+  const recon = [
+    {name:"Unassigned (Fed discrepancy)", cls:'hatch', cur:H.disc[c], prior:H.disc[p], note:"The Fed's own balancing line: holders it cannot see and differences in how holdings are valued. Not a holder."},
+    {name:"Gap to Treasury's count", cls:'hatch2', cur:gap(c), prior:gap(p), note:"Difference between the Fed's total for marketable debt and Treasury's count of marketable debt held by the public. Reason not yet confirmed."},
+    {name:"Non-tradable debt", cls:'nontr', cur:non(c), prior:non(p), note:"Savings bonds, the TSP G Fund, state and local government series and other securities that are held by the public but never traded. From the debt statement."}];
+  const share = (v,i) => v/pub[i]*100;
+  $('#wh-sub').textContent = `Debt held by the public, ${T(pub[c])} on ${dl(H.asof)}, split by who owns it. Holders come from the Fed's Financial Accounts (table F3.2.s, released ${H.release}), which values some holdings at market prices, such as foreign holders'. The last three rows reconcile the Fed's total to Treasury's figure, so the shares add to 100%. Updated quarterly; next release ${H.next}.`;
+  const all = rows.concat(recon);
+  $('#wh-bar').innerHTML = all.map(r=>`<div class="${r.cls||''}" style="flex:${r.cur};${r.color?'background:'+r.color:''}" title="${r.name}: ${B(r.cur)}, ${share(r.cur,c).toFixed(1)}%"></div>`).join('');
+  $('#wh-leg').innerHTML = all.map(r=>`<span><i class="swatch ${r.cls||''}" style="${r.color?'background:'+r.color:''}"></i>${r.name.replace(' (Fed discrepancy)','')} ${share(r.cur,c).toFixed(share(r.cur,c)<2?1:0)}%</span>`).join('');
+  const mx = Math.max(...rows.map(r=>r.cur));
+  const bar = (v,col,k) => `<span class="${k||''}" style="width:${Math.max(0.6,v/mx*100).toFixed(1)}%;${col?'background:'+col:''}"></span>`;
+  const partTxt = r => r.parts.length ? r.parts.map(([l,v],i)=>`${l} ${B(v)}`).join(', ')+'.' : '';
+  const line = (r,k) => {
+    const sh = share(r.cur,c), d = r.cur-r.prior, ds = sh-share(r.prior,p), note = r.note || partTxt(r);
+    return `<tr class="${note?'hasnote ':''}${k||''}"><td><i class="swatch ${r.cls||''}" style="${r.color?'background:'+r.color+';':''}margin-right:6px;vertical-align:-1px"></i>${r.name}</td><td class="b">${bar(r.cur,r.color,r.cls)}</td><td class="num">${B(r.cur)}</td><td class="num">${sh.toFixed(1)}%</td><td class="num ${cls(d)}">${SB(d)}</td><td class="num ${cls(ds)}">${sg(ds)} pt</td></tr>` + (note?`<tr class="pnote"><td colspan="6">${note}</td></tr>`:'');
+  };
+  const held = H.held;
+  let t = `<colgroup><col><col style="width:20%"><col style="width:76px"><col style="width:60px"><col style="width:80px"><col style="width:80px"></colgroup><thead><tr><th>Holder</th><th></th><th>Held</th><th>Share</th><th>1-yr chg</th><th>Share chg</th></tr></thead><tbody>`;
+  rows.forEach(r=>t+=line(r));
+  t += `<tr class="sub"><td>Holders identified by the Fed</td><td></td><td class="num">${B(held[c])}</td><td class="num">${share(held[c],c).toFixed(1)}%</td><td class="num ${cls(held[c]-held[p])}">${SB(held[c]-held[p])}</td><td class="num">${sg(share(held[c],c)-share(held[p],p))} pt</td></tr>`;
+  recon.forEach(r=>t+=line(r,'recon'));
+  t += `<tr class="grand"><td>Debt held by the public</td><td></td><td class="num">${B(pub[c])}</td><td class="num">100.0%</td><td class="num ${cls(pub[c]-pub[p])}">${SB(pub[c]-pub[p])}</td><td></td></tr></tbody>`;
+  $('#wh-t').innerHTML = t;
+  const fed=rows.find(r=>/Federal Reserve/.test(r.name)), fo=rows.find(r=>/Foreign/.test(r.name)), mm=rows.find(r=>/Money market/.test(r.name));
+  $('#wh-notes').innerHTML = `<p>Changes are from ${dl(H.prior)} to ${dl(H.asof)}. Over that year debt held by the public rose ${B(pub[c]-pub[p])}. Foreign holders added ${B(fo.cur-fo.prior)} but their share went from ${share(fo.prior,p).toFixed(1)}% to ${share(fo.cur,c).toFixed(1)}%; the Fed added ${B(fed.cur-fed.prior)}, mostly bills; money market funds added ${B(mm.cur-mm.prior)}.</p><p>The Fed revises earlier quarters with each release, so last year's figures here can differ from what an older release showed.</p>`;
+})();
+
+// ---------- foreign holders table ----------
+const F = TIC, dates = F.dates, n = dates.length, iM = n-2, iY = n-13;
+const NAMES = F.countries;
+const PAL = ['#2a78d6','#c0392b','#eda100','#1baf7a','#7a5cd6','#e0602b','#0e9aa7','#e87ba4','#5a6875','#8b6f47','#5b8c2a','#b5379a','#3b4cc0','#d4a017','#6c7a89','#a0522d','#2e8b57','#9370db','#c71585','#4682b4'];
+const COL = {}; NAMES.forEach((k,i)=>COL[k]=PAL[i]);
+const SHORT = {'China, Mainland':'China','United Kingdom':'UK','Cayman Islands':'Cayman Is.','United Arab Emirates':'UAE','Korea, South':'South Korea'};
+const sn = k => SHORT[k]||k;
+const GT = F.v['Grand Total'], OF = F.v['Foreign Official'];
+(function(){
+  const last = n-1;
+  const ranked = NAMES.slice().sort((a,b)=>F.v[b][last]-F.v[a][last]);
+  const row = (rk,name,sw,v,vm,vy,shr,k) => `<tr class="${k||''}"><td class="rk">${rk}</td><td>${sw?`<i class="swatch" style="background:${sw};margin-right:6px;vertical-align:-1px"></i>`:''}${name}</td><td class="num">${v.toFixed(1)}</td><td class="num ${cls(v-vm)}">${sg(v-vm)}</td><td class="num ${cls(v-vy)}">${sg(v-vy)}</td><td class="num">${shr}</td></tr>`;
+  let t = `<colgroup><col style="width:26px"><col><col style="width:66px"><col style="width:58px"><col style="width:64px"><col style="width:54px"></colgroup><thead><tr><th>#</th><th>Country</th><th>Held</th><th>1 mo</th><th>12 mo</th><th>Share</th></tr></thead><tbody>`;
+  ranked.forEach((k,i)=>{ const s=F.v[k]; t+=row(i+1,k,COL[k],s[last],s[iM],s[iY],(s[last]/GT[last]*100).toFixed(1)+'%'); });
+  const ao=F.allOther; t+=row('','All other',null,ao[0],ao[1],ao[2],(ao[0]/GT[last]*100).toFixed(1)+'%','oth');
+  t+=row('','<b>All foreign holders</b>',null,GT[last],GT[iM],GT[iY],'100%','grand');
+  t+=row('','of which: foreign official',null,OF[last],OF[iM],OF[iY],(OF[last]/GT[last]*100).toFixed(1)+'%','of');
+  $('#fh-t').innerHTML = t+'</tbody>';
+  $('#fh-sub').textContent = `${dl(F.asof)}, billions of dollars, from Treasury's Major Foreign Holders table (released ${F.release}). Changes are versus ${dl(dates[iM])} and ${dl(dates[iY])}. "Foreign official" is central banks and governments.`;
+})();
+
+// ---------- foreign holders chart ----------
+(function(){
+  let sel = new Set(NAMES.slice(0,5)), mode = 'lvl';
+  const chips = $('#fh-chips');
+  chips.innerHTML = NAMES.map(k=>`<button type="button" class="chip" data-n="${k}" style="--c:${COL[k]}" aria-pressed="false"><i></i>${sn(k)}</button>`).join('');
+  const sync = () => chips.querySelectorAll('.chip').forEach(c=>c.setAttribute('aria-pressed', sel.has(c.dataset.n)));
+  chips.addEventListener('click', e=>{ const c=e.target.closest('.chip'); if(!c) return; const k=c.dataset.n; sel.has(k)?sel.delete(k):sel.add(k); draw(); });
+  $('#fh-quick').addEventListener('click', e=>{ const b=e.target.closest('button'); if(!b) return; sel = new Set(b.dataset.q==='top5'?NAMES.slice(0,5):b.dataset.q==='all'?NAMES:[]); draw(); });
+  $('#fh-mode').addEventListener('click', e=>{ const b=e.target.closest('button'); if(!b) return; mode=b.dataset.m; [...$('#fh-mode').children].forEach(x=>x.setAttribute('aria-pressed', x===b)); draw(); });
+  const val = (k,i) => mode==='sh' ? F.v[k][i]/GT[i]*100 : F.v[k][i];
+  const narrow = () => window.matchMedia('(max-width: 700px)').matches;
+  function draw(){
+    sync();
+    const box = $('#c-fh'); const W = narrow()?620:720, H = 400, ml = 46, mr = 88, mt = 12, mb = 26;
+    const xs = i => ml + i/(n-1)*(W-ml-mr);
+    const on = NAMES.filter(k=>sel.has(k));
+    let mx = 0; on.forEach(k=>{ for(let i=0;i<n;i++) mx=Math.max(mx,val(k,i)); });
+    if (!mx) mx = mode==='sh'?20:1400;
+    const step = mode==='sh' ? (mx>12?5:2) : (mx>800?200:mx>300?100:50), top = Math.ceil(mx/step)*step;
+    const ys = v => mt + (1-v/top)*(H-mt-mb);
+    let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Foreign holdings of Treasuries by country, monthly since 2014"><g class="grid">`;
+    for (let v=0; v<=top+1e-9; v+=step) s += `<line x1="${ml}" x2="${W-mr}" y1="${ys(v)}" y2="${ys(v)}"/><text x="${ml-6}" y="${ys(v)+4}" text-anchor="end">${mode==='sh'?v+'%':v>=1000?(v/1000).toFixed(1)+'T':v+'B'}</text>`;
+    s += '</g>';
+    dates.forEach((d,i)=>{ if (d.endsWith('-01') && +d.slice(0,4)%2===0) s += `<text x="${xs(i)}" y="${H-8}" text-anchor="middle">${d.slice(0,4)}</text>`; });
+    const im = dates.indexOf('2023-03');
+    s += `<line x1="${xs(im)}" x2="${xs(im)}" y1="${mt}" y2="${H-mb}" stroke="var(--faint)" stroke-dasharray="4 4"/>`;
+    const ends = [];
+    on.forEach(k=>{ const d = 'M' + dates.map((_,i)=>xs(i).toFixed(1)+' '+ys(val(k,i)).toFixed(1)).join(' L');
+      s += `<path d="${d}" fill="none" stroke="${COL[k]}" stroke-width="1.8" stroke-linejoin="round"/>`;
+      const y = ys(val(k,n-1)); s += `<circle cx="${xs(n-1)}" cy="${y}" r="3.2" fill="${COL[k]}"/>`; ends.push({k,y}); });
+    ends.sort((a,b)=>a.y-b.y); for (let i=1;i<ends.length;i++) if (ends[i].y-ends[i-1].y<12) ends[i].y = ends[i-1].y+12;
+    if (ends.length<=8) ends.forEach(o=> s += `<text class="elab" x="${W-mr+8}" y="${o.y+4}" style="fill:${COL[o.k]}">${sn(o.k)}</text>`);
+    s += `<line class="cross" x1="0" x2="0" y1="${mt}" y2="${H-mb}" stroke="var(--muted)" stroke-dasharray="3 3" style="display:none"/><rect x="${ml}" y="${mt}" width="${W-ml-mr}" height="${H-mt-mb}" fill="transparent"/></svg>`;
+    box.innerHTML = s + '<div class="tip"></div>' + (on.length?'':'<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:13px">Pick one or more countries above</div>');
+    if (narrow()) box.scrollLeft = box.scrollWidth;
+    const svg = box.querySelector('svg'), tip = box.querySelector('.tip'), cr = svg.querySelector('.cross');
+    function mv(ev){ if(!on.length) return; const r = svg.getBoundingClientRect(); const x = (ev.clientX-r.left)/r.width*W;
+      const i = Math.max(0, Math.min(n-1, Math.round((x-ml)/(W-ml-mr)*(n-1))));
+      tip.innerHTML = `<div class="t">${dl(dates[i])}</div>` + on.slice().sort((a,b)=>val(b,i)-val(a,i)).map(k=>`<div class="r"><span><i class="swatch" style="background:${COL[k]}"></i>${sn(k)}</span><span>${mode==='sh'?val(k,i).toFixed(1)+'%':'$'+val(k,i).toFixed(1)+'B'}</span></div>`).join('');
+      tip.style.display='block'; const px = xs(i)/W*r.width - box.scrollLeft*0; const bw = box.clientWidth;
+      const left = xs(i)/W*r.width; tip.style.left = (left+14+tip.offsetWidth > box.scrollLeft+bw ? left-tip.offsetWidth-14 : left+14) + 'px'; tip.style.top = '8px';
+      cr.setAttribute('x1', xs(i)); cr.setAttribute('x2', xs(i)); cr.style.display='block'; }
+    svg.addEventListener('mousemove', mv); svg.addEventListener('touchstart', e=>mv(e.touches[0]), {passive:true}); svg.addEventListener('touchmove', e=>mv(e.touches[0]), {passive:true});
+    svg.addEventListener('mouseleave', ()=>{ tip.style.display='none'; cr.style.display='none'; });
+  }
+  draw();
+})();
+})();
+</script>
+</body>
+</html>
