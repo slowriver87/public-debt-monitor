@@ -11,7 +11,7 @@ The page is `index.html`, a self-contained file served by GitHub Pages. Every nu
 | Object | What | Source | Frequency | Units |
 |---|---|---|---|---|
 | `DATA` | Monthly Statement of the Public Debt (MSPD): totals, marketable and nonmarketable securities, debt limit, intragovernmental fund holdings | U.S. Treasury, [Fiscal Data API](https://fiscaldata.treasury.gov/datasets/monthly-statement-public-debt/) (`mspd_table_1`, `mspd_table_2`, `mspd_table_3_nonmarket`); cross-checked with [Debt to the Penny](https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/) | Monthly, around the 4th–7th business day | $ millions |
-| `HOLD` | Who holds debt held by the public (foreign holders, the Fed, money market funds, households, banks, pensions, …) | Federal Reserve, [Financial Accounts of the United States (Z.1)](https://www.federalreserve.gov/releases/z1/), table F3.2.s "Treasury securities", read line by line from [FRED](https://fred.stlouisfed.org/) (series `BOGZ1<code>Q`) | Quarterly (March, June, September, December) | $ billions |
+| `HOLD` | Who holds debt held by the public (foreign holders, the Fed, money market funds, households, banks, pensions, …) | Federal Reserve, [Financial Accounts of the United States (Z.1)](https://www.federalreserve.gov/releases/z1/), table F3.2.s "Treasury securities", read line by line from [FRED](https://fred.stlouisfed.org/) (series `BOGZ1<code>Q`), or from the [Fed's own table](https://www.federalreserve.gov/releases/z1/current/html/F3_2_s.htm) by series code if FRED cannot be read | Quarterly (March, June, September, December) | $ billions |
 | `TIC` | Foreign holders by country | U.S. Treasury, [TIC Table 5: Major Foreign Holders of Treasury Securities](https://ticdata.treasury.gov/resource-center/data-chart-center/tic/Documents/slt_table5.html); history back to 2014 from `mfhhis01` | Monthly, around the 15th–18th, for the month two months earlier | $ billions |
 
 `data/summary.json` is a small summary for other pages: latest statement date, total, held by the public, intragovernmental, bill share (the same formula as the page: bills, public plus intragovernmental, as a percentage of all marketable debt, public plus intragovernmental, from the latest month in `DATA.mkt`), debt limit and room under it, and the dates of the holder data.
@@ -22,7 +22,7 @@ The page is `index.html`, a self-contained file served by GitHub Pages. Every nu
 
 1. **Fetch.** For each source it asks whether there is anything newer than what the page shows:
    - `DATA`: a newer `record_date` in MSPD Table I than `DATA.asof`. New months are appended; the detailed tables are rebuilt for the latest month.
-   - `HOLD`: a newer quarter on FRED, or revised values. The Fed revises history with every release, so both quarters shown are taken from the newest release.
+   - `HOLD`: only once a new Z.1 release could be out, i.e. on or after the next scheduled release date stored in `HOLD.next`; on other days it is skipped. When due, it reads FRED, and if FRED cannot be read it falls back to the Fed's own table F3.2.s, matching lines by series code (e.g. `FL313161105`). The Fed revises history with every release, so both quarters shown are taken from the newest release. If neither source can be read, the page keeps its current holder figures, the run summary shows a warning, and an issue is opened, but the run does not fail, so the monthly data can still update.
    - `TIC`: a newer month in Table 5. New months are appended, then the last 13 months of every series are overwritten with Table 5's values, because Treasury revises them.
 2. **Check.** Nothing is written unless every check passes:
    - MSPD: the new totals row equals Table I's total, which equals Table II's total; the intragovernmental fund rows add up to the Government Account Series (within $1M); the marketable classes add up to total marketable (within $1M); the debt-limit arithmetic in Table II adds up. The total is also compared with Debt to the Penny; a gap over $1M is reported but does not block.
@@ -30,7 +30,9 @@ The page is `index.html`, a self-contained file served by GitHub Pages. Every nu
    - TIC: every series has as many values as there are months; the 20 countries plus "All Other" add up to the Grand Total (within $1B) for the newest month; if a country not on the page enters the top 20, the script stops instead of reshaping the page.
    - The page: only the three data lines change, the education-only note is still there, each object keeps its keys, and the page's scripts still parse.
 3. **Write and commit.** If something changed and every check passed, the script rewrites only those three lines of `index.html` (compact JSON) plus `data/summary.json`, and the workflow commits with a message saying what was updated, e.g. `Update MSPD to 2026-10-31; TIC to 2026-09`. GitHub Pages republishes the page.
-4. **On a failed check** nothing is committed, the workflow run fails (GitHub emails the repository owner), and the workflow opens or updates an issue titled "Data update failed" with the check report.
+4. **On a failed check** nothing is committed, the workflow run fails (GitHub emails the repository owner), and the workflow opens or updates an issue titled "Data update needs attention" with the check report.
+
+Every request sends a normal browser User-Agent, waits up to 60 seconds, and is tried 3 times with a short pause before a source counts as unreadable.
 
 When no source has anything new, the run ends quietly.
 
@@ -42,7 +44,7 @@ python scripts/update.py --dry-run   # fetch and check, report what would change
 python scripts/update.py             # fetch, check, and write if anything changed
 ```
 
-From GitHub: **Actions → Update data → Run workflow**. "Dry run" is ticked by default: the run fetches and checks everything and shows the comparison with the current page in the run's summary, without committing. Untick it to run a real update.
+From GitHub: **Actions → Update data → Run workflow**. "Dry run" is ticked by default: the run fetches and checks everything and shows the comparison with the current page in the run's summary, without committing. Untick it to run a real update. Tick "Check holders" to read the Z.1 data even when no new release is due, for example to compare the current page with FRED.
 
 ## Not automated
 

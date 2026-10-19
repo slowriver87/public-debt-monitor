@@ -4,7 +4,8 @@
 The page draws everything from three one-line JavaScript objects:
 
   const DATA = {...};   Monthly Statement of the Public Debt (Treasury Fiscal Data API)
-  const HOLD = {...};   Who holds the debt, quarterly (Federal Reserve Z.1 table F3.2.s, via FRED)
+  const HOLD = {...};   Who holds the debt, quarterly (Federal Reserve Z.1 table F3.2.s, via FRED,
+                        or the Fed's own table if FRED cannot be read)
   const TIC = {...};    Foreign holders by country, monthly (Treasury TIC Table 5)
 
 This script fetches each source, rebuilds only those three lines, runs the checks,
@@ -14,9 +15,13 @@ Usage:
   python scripts/update.py              fetch, check, write if anything changed
   python scripts/update.py --dry-run    fetch and check, report what would change, write nothing
   python scripts/update.py --check      no network: validate the objects already in index.html
+  --hold always                         read Z.1 even if no new release is due (default: only
+                                        on or after HOLD.next, the next scheduled release)
 
 Exit codes: 0 = success (updated or nothing new), 1 = a check failed or a source
-could not be read. Nothing is written unless the exit code is 0.
+could not be read. Nothing is written unless the exit code is 0. One exception: if
+Z.1 cannot be read from FRED or the Fed, HOLD keeps its current values, a warning
+is reported (and written to --alert-file), and DATA and TIC can still update.
 
 Standard library only.
 """
@@ -25,6 +30,7 @@ import argparse
 import calendar
 import datetime as dt
 import decimal
+import html.parser
 import json
 import os
 import re
@@ -44,11 +50,18 @@ FISCAL_API = "https://api.fiscaldata.treasury.gov/services/api/fiscal_service"
 MSPD = FISCAL_API + "/v1/debt/mspd/"
 PENNY = FISCAL_API + "/v2/accounting/od/debt_to_penny"
 FRED_CSV = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+Z1_TABLE = "https://www.federalreserve.gov/releases/z1/current/html/F3_2_s.htm"
 Z1_HOME = "https://www.federalreserve.gov/releases/z1/"
 TIC_TABLE5 = "https://ticdata.treasury.gov/resource-center/data-chart-center/tic/Documents/slt_table5.txt"
 TIC_PRESS = "https://home.treasury.gov/data/treasury-international-capital-tic-system-home-page/tic-press-releases"
 
-USER_AGENT = "public-debt-monitor-updater/1.0"
+HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/129.0 Safari/537.36"),
+    "Accept": "text/html,application/json,text/csv,text/plain,*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+TIMEOUT, TRIES, PAUSE = 60, 3, 5
 DISCLAIMER = "For education only. Not financial advice."
 OBJECTS = ("DATA", "HOLD", "TIC")
 
@@ -77,6 +90,10 @@ class CheckFailed(Exception):
     pass
 
 
+class SourceUnavailable(CheckFailed):
+    """A source could not be read (network error, timeout, HTTP error, or a missing line)."""
+
+
 class Report:
     """Collects check results, warnings and a human-readable comparison."""
 
@@ -85,6 +102,7 @@ class Report:
         self.warnings = []
         self.passed = []
         self.lines = []
+        self.alerts = []      # non-blocking problems that still need a person (opened as an issue)
 
     def check(self, ok, label, detail=""):
         text = label + (f" ({detail})" if detail else "")
@@ -110,18 +128,18 @@ class Report:
 
 # ---------------------------------------------------------------- helpers
 
-def fetch(url, params=None, tries=4):
+def fetch(url, params=None, tries=TRIES):
     if params:
         url += ("&" if "?" in url else "?") + urllib.parse.urlencode(params, safe=":,[]-")
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    req = urllib.request.Request(url, headers=HEADERS)
     for attempt in range(tries):
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
                 return r.read().decode(r.headers.get_content_charset() or "utf-8", "replace")
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
             if attempt == tries - 1:
-                raise CheckFailed(f"could not read {url}: {e}")
-            time.sleep(2 ** (attempt + 1))
+                raise SourceUnavailable(f"could not read {url} after {tries} tries: {e}")
+            time.sleep(PAUSE)
 
 
 def api(endpoint, params, page_size=10000):
@@ -517,8 +535,111 @@ def fred_series(code):
         y, m = int(cells[0][:4]), int(cells[0][5:7])
         out[(y, (m - 1) // 3 + 1)] = v / 1000
     if not out:
-        raise CheckFailed(f"FRED {sid}: no observations (series renamed or discontinued?)")
+        raise SourceUnavailable(f"FRED {sid}: no observations (series renamed or discontinued?)")
     return out
+
+
+def z1_from_fred(codes):
+    series = {}
+    for code in sorted(codes):     # stops at the first series FRED cannot serve
+        series[code] = fred_series(code)
+        time.sleep(0.2)
+    return series
+
+
+class TableParser(html.parser.HTMLParser):
+    """Collects the text of every table row as a list of cell strings."""
+
+    def __init__(self):
+        super().__init__()
+        self.rows, self.row, self.cell = [], None, None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "tr":
+            self.row = []
+        elif tag in ("td", "th") and self.row is not None:
+            self.cell = []
+
+    def handle_endtag(self, tag):
+        if tag in ("td", "th") and self.cell is not None and self.row is not None:
+            self.row.append(re.sub(r"\s+", " ", "".join(self.cell)).strip())
+            self.cell = None
+        elif tag == "tr" and self.row is not None:
+            if any(self.row):
+                self.rows.append(self.row)
+            self.row = None
+
+    def handle_data(self, data):
+        if self.cell is not None:
+            self.cell.append(data)
+
+
+Z1_CODE = re.compile(r"\b([A-Z]{2})(\d{9})\b")
+Z1_QUARTER = re.compile(r"(\d{4})\s*:?\s*Q\s*([1-4])\b|\bQ\s*([1-4])\s*:?\s*(\d{4})", re.I)
+NUMBER = re.compile(r"^-?\d*\.?\d+$")
+
+
+def z1_quarter(cell):
+    m = Z1_QUARTER.search(cell)
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2))) if m.group(1) else (int(m.group(4)), int(m.group(3)))
+
+
+def z1_from_fed_table(codes, report):
+    """The same lines from the Fed's own HTML table, matched by series code (e.g. FL313161105)."""
+    page_html = fetch(Z1_TABLE)
+    parser = TableParser()
+    parser.feed(page_html)
+    scale = 1 / 1000 if re.search(r"millions of dollars", page_html, re.I) else 1.0
+    header, cols, found = None, None, {}
+    for row in parser.rows:
+        qs = {i: q for i, c in enumerate(row) if (q := z1_quarter(c))}
+        if len(qs) >= 2:
+            header, cols = row, qs
+            continue
+        code = next((m.group(1) + m.group(2) for c in row if (m := Z1_CODE.search(c))), None)
+        if header is None or code is None:
+            continue
+        offset = len(row) - len(header)     # align value columns from the right
+        for i, q in cols.items():
+            j = i + offset
+            text = row[j].replace(",", "").replace(" ", "") if 0 <= j < len(row) else ""
+            if NUMBER.match(text):
+                found.setdefault(code, {})[q] = float(text) * scale
+    if not found:
+        raise SourceUnavailable(f"{Z1_TABLE}: no series codes with quarterly values found")
+    series, missing = {}, []
+    for code in sorted(codes):
+        other = {"FL": "LM", "LM": "FL"}.get(code[:2], "") + code[2:]
+        if code in found:
+            series[code] = found[code]
+        elif other in found:
+            report.warn(f"Fed table: {code} not found, used {other} (same line, other prefix)")
+            series[code] = found[other]
+        else:
+            missing.append(code)
+    if missing:
+        raise SourceUnavailable(f"Fed table F3.2.s has no lines {missing} (renamed or renumbered?)")
+    return series
+
+
+def read_z1(codes, report):
+    """Z.1 lines from FRED, or from the Fed's own table if FRED cannot be read."""
+    try:
+        return z1_from_fred(codes), "FRED"
+    except SourceUnavailable as e:
+        report.warn(f"HOLD: FRED not read ({e}); used the Fed's table F3.2.s instead")
+    return z1_from_fed_table(codes, report), "the Fed's table F3.2.s"
+
+
+def hold_due(old, today=None):
+    """True when a new Z.1 release could be out: on or after HOLD.next, which is later than HOLD.release."""
+    today = today or dt.date.today()
+    nxt, rel = parse_text_date(old.get("next", "")), parse_text_date(old.get("release", ""))
+    if nxt is None or (rel is not None and nxt <= rel):
+        return True
+    return today >= nxt
 
 
 def z1_release_dates(report, old):
@@ -545,20 +666,17 @@ def z1_release_dates(report, old):
 
 def update_hold(old, data, report):
     codes = {code for parts in Z1_GROUPS.values() for _, code in parts} | set(Z1_TOTALS.values())
-    series = {}
-    for code in sorted(codes):
-        series[code] = fred_series(code)
-        time.sleep(0.2)
+    series, source = read_z1(codes, report)
     newest = {code: max(s) for code, s in series.items()}
     cur_q = max(newest.values())
     lagging = sorted(c for c, q in newest.items() if q != cur_q)
     if lagging:
-        raise CheckFailed(f"Z.1 lines without {cur_q[0]}:Q{cur_q[1]} on FRED: {lagging} "
+        raise CheckFailed(f"Z.1 lines without {cur_q[0]}:Q{cur_q[1]} on {source}: {lagging} "
                           f"(renamed or renumbered? map them again from table F3.2.s)")
     prior_q = (cur_q[0] - 1, cur_q[1])
     missing = sorted(c for c, s in series.items() if prior_q not in s)
     if missing:
-        raise CheckFailed(f"Z.1 lines without {prior_q[0]}:Q{prior_q[1]} on FRED: {missing}")
+        raise CheckFailed(f"Z.1 lines without {prior_q[0]}:Q{prior_q[1]} on {source}: {missing}")
     asof = month_end(cur_q[0], cur_q[1] * 3)
     prior = month_end(prior_q[0], prior_q[1] * 3)
     if asof < old["asof"]:
@@ -618,11 +736,12 @@ def update_hold(old, data, report):
     # ---- compare with the page
     changed = {k: v for k, v in new.items() if k not in ("release", "next") and v != old[k]}
     if not changed:
-        report.say(f"HOLD: Z.1 values on FRED match the page for {prior} and {asof} (rounded to 0.1).")
+        report.say(f"HOLD: Z.1 values from {source} match the page for {prior} and {asof} (rounded to 0.1).")
         return None
     if new["asof"] != old["asof"] or new["held"] != old["held"]:
         new["release"], new["next"] = z1_release_dates(report, old)
-    report.say(f"HOLD: quarter {asof} (page had {old['asof']}); release {new['release']}, next {new['next']}.")
+    report.say(f"HOLD: quarter {asof} from {source} (page had {old['asof']}); "
+               f"release {new['release']}, next {new['next']}.")
     report.say(f"  {'group':<28} {'page prior':>10} {'new prior':>10} {'page cur':>10} {'new cur':>10}  $B")
     for g_old, g_new in zip(old["groups"], groups):
         flag = "" if (g_old["cur"], g_old["prior"], g_old["parts"]) == \
@@ -850,6 +969,9 @@ def main():
     ap.add_argument("--check", action="store_true", help="validate index.html without network access")
     ap.add_argument("--message-file", help="write the commit message here when something changed")
     ap.add_argument("--report-file", help="also write the report here (e.g. the GitHub job summary)")
+    ap.add_argument("--alert-file", help="write non-blocking problems that need a person here")
+    ap.add_argument("--hold", choices=("auto", "always"), default="auto",
+                    help="auto: read Z.1 only when a new release is due (default); always: read it anyway")
     args = ap.parse_args()
 
     report = Report()
@@ -868,11 +990,25 @@ def main():
         else:
             new = dict(objs)
             changed = []
+            hold = objs["HOLD"]
             for name, fn in (("DATA", lambda: update_data(objs["DATA"], report)),
-                             ("HOLD", lambda: update_hold(objs["HOLD"], new["DATA"], report)),
+                             ("HOLD", lambda: update_hold(hold, new["DATA"], report)),
                              ("TIC", lambda: update_tic(objs["TIC"], report))):
+                if name == "HOLD" and args.hold == "auto" and not hold_due(hold):
+                    report.say(f"HOLD: skipped; no new Z.1 release due until {hold['next']} "
+                               f"(page has the {hold['release']} release).")
+                    report.say()
+                    continue
                 try:
                     result = fn()
+                except SourceUnavailable as e:
+                    if name != "HOLD":
+                        report.check(False, f"{name}: {e}")
+                    else:           # keep the current HOLD so DATA and TIC can still update
+                        msg = f"HOLD not updated, kept the current values: {e}"
+                        report.warn(msg)
+                        report.alerts.append(msg)
+                    result = None
                 except CheckFailed as e:
                     report.check(False, f"{name}: {e}")
                     result = None
@@ -909,6 +1045,9 @@ def main():
         report.say("Nothing was written because a check failed.")
     out = report.render()
     print(out)
+    if args.alert_file and report.alerts:
+        with open(args.alert_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(report.alerts) + "\n")
     if args.report_file:
         with open(args.report_file, "a", encoding="utf-8") as f:
             f.write("```\n" + out + "\n```\n")
