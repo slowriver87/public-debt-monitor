@@ -169,7 +169,15 @@ def api_newest(endpoint, params=None):
 def num(v):
     if v in (None, "", "null"):
         return 0.0
-    return float(str(v).replace(",", ""))
+    s = str(v).replace(",", "").strip()
+    # MSPD prints "*" for amounts under $500 thousand and "(*)" for such amounts
+    # in a column of deductions; both round to zero in $ millions.
+    if s in ("*", "(*)"):
+        return 0.0
+    # Parentheses mean a negative amount, e.g. "(1.5)" = -1.5.
+    if s.startswith("(") and s.endswith(")"):
+        return -float(s[1:-1])
+    return float(s)
 
 
 def r1(x):
@@ -365,6 +373,8 @@ def build_holders(rows):
     need_fields(rows, ("security_class2_desc", name_f, prior_f, issued_f, redeemed_f, cur_f),
                 "MSPD Table III")
 
+    exact, stars = {}, {}
+
     def pick(cls2):
         agg = {}
         for r in rows:
@@ -373,6 +383,11 @@ def build_holders(rows):
             name = re.sub(r"[.\s]+$", "", (r.get(name_f) or "").strip())
             if not name or name.lower() in ("null", "_") or name.lower().startswith("total"):
                 continue
+            # A subtotal of the class's funds, e.g. "Government Account Series -
+            # Intragovernmental Holdings" (first seen October 2026). Its "Matured ..."
+            # sibling is real debt, not a subtotal, and is kept.
+            if norm(name) in ("government account series", f"government account series - {cls2}"):
+                continue
             a = agg.setdefault(name, {"name": name, "prior": 0.0, "issued": 0.0,
                                       "redeemed": 0.0, "cur": 0.0})
             a["prior"] += num(r[prior_f])
@@ -380,6 +395,9 @@ def build_holders(rows):
             a["redeemed"] -= abs(num(r[redeemed_f]))
             a["cur"] += num(r[cur_f])
         out = [{k: (r1(v) if k != "name" else v) for k, v in a.items()} for a in agg.values()]
+        exact[cls2] = sum(a["cur"] for a in agg.values())  # unrounded, for the sum check
+        stars[cls2] = sum(1 for r in rows if norm(r.get("security_class2_desc")) == cls2
+                          and str(r.get(cur_f)).strip() in ("*", "(*)"))
         return sorted(out, key=lambda a: -a["cur"])
 
     intra = pick("intragovernmental holdings")
@@ -392,7 +410,8 @@ def build_holders(rows):
         "holders_other": r1(sum(a["cur"] for a in rest)),
         "holders_other_prior": r1(sum(a["prior"] for a in rest)),
         "gas_public": [{"name": a["name"], "prior": a["prior"], "cur": a["cur"]} for a in public[:6]],
-        "_intra_sum": r1(sum(a["cur"] for a in intra)),
+        "_intra_sum": r1(exact["intragovernmental holdings"]),
+        "_intra_stars": stars["intragovernmental holdings"],
     }
 
 
@@ -430,6 +449,7 @@ def update_data(old, report):
                                old["table2"])
     h = build_holders(mspd_rows("mspd_table_3_nonmarket", record_date=f"eq:{asof}"))
     intra_sum = h.pop("_intra_sum")
+    intra_stars = h.pop("_intra_stars")
     new.update(h)
 
     # ---- checks
@@ -440,8 +460,11 @@ def update_data(old, report):
     report.check(all(close(a, b, 0.05) for a, b in zip(t1["total"], t2["total"])),
                  "DATA: table1.total equals table2.total", f"{t1['total']} vs {t2['total']}")
     gas = t1["nonmarketable"].get("Government Account Series", [0, 0, 0])[1]
-    report.check(close(intra_sum, gas, 1.0),
-                 "DATA: intragov fund rows sum to Government Account Series intragov within $1M",
+    # Each balance printed as "*" is under $0.5M but is read as 0, so allow for it.
+    tol = 1.0 + 0.5 * intra_stars
+    report.check(close(intra_sum, gas, tol),
+                 f"DATA: intragov fund rows sum to Government Account Series intragov within ${tol:g}M"
+                 + (f" ({intra_stars} balances under $0.5M shown as *)" if intra_stars else ""),
                  f"{intra_sum:,.1f} vs {gas:,.1f}")
     for i, part in enumerate(("public", "intragov", "total")):
         s = sum(v[i] for v in t1["marketable"].values())
